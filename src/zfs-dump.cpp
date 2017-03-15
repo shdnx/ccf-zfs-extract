@@ -14,11 +14,19 @@ struct IndentRAII {
   }
 };
 
+#define INDENTED_IMPL(CNT) \
+  bool __flag##CNT = true; \
+  for (IndentRAII __indent##CNT; __flag##CNT; __flag##CNT = false)
+
+#define INDENTED INDENTED_IMPL(__COUNTER__)
+
 #define PRINT(fp, ...) \
   do { \
-    fprintf(fp, "%*s", g_indent * 4); \
-    fprintf(fp, __VA_ARGS__); \
+    std::fprintf(fp, "%*s", g_indent * 4, ""); \
+    std::fprintf(fp, __VA_ARGS__); \
   } while (0)
+
+#define HEADER(fp, ...) PRINT(fp, __VA_ARGS__); INDENTED
 
 void Dump::dva(FILE *fp, const Dva &dva) {
   PRINT(fp, "vdev = %08x\n", dva.vdev);
@@ -28,45 +36,38 @@ void Dump::dva(FILE *fp, const Dva &dva) {
   PRINT(fp, "gang = %d\n", dva.gang_block);
 }
 
-void Dump::blkptr(FILE *fp, const Blkptr &blkptr) {
-  PRINT(fp, "BLKPTR:\n");
-  IndentRAII x{};
-
-  for (size_t i = 0; i < 3; i++) {
-    PRINT(fp, "vdev[%zu]:\n", i);
-
-    IndentRAII x{};
-    Dump::dva(fp, blkptr.vdev[i]);
+void Dump::blkptr_props(FILE *fp, const Props &props) {
+  HEADER(fp, "Props:\n") {
+    PRINT(fp, "lsize = %04hx, psize = %04hx\n", props.lsize, props.psize);
+    PRINT(fp, "comp = %02hhx\n", props.comp);
+    PRINT(fp, "embedded = %d\n", props.embedded);
+    PRINT(fp, "cksum = %02hhx\n", props.cksum);
+    PRINT(fp, "type = %02hhx\n", props.type);
+    PRINT(fp, "lvl = %02hhx\n", props.lvl);
+    PRINT(fp, "encrypt = %d\n", props.encrypt);
+    PRINT(fp, "dedup = %d\n", props.dedup);
+    PRINT(fp, "byte_order = %d\n", props.byte_order);
   }
+}
 
-  // TODO: props, etc.
+void Dump::blkptr(FILE *fp, const Blkptr &blkptr) {
+  HEADER(fp, "BLKPTR:\n") {
+    Dump::blkptr_props(fp, blkptr.props);
+
+    for (size_t i = 0; i < 3; i++) {
+      HEADER(fp, "vdev[%zu]:\n", i) {
+        Dump::dva(fp, blkptr.vdev[i]);
+      }
+    }
+  }
 }
 
 void Dump::uberblock(FILE *fp, const Uberblock &ub) {
-  PRINT(fp, "Uberblock:\n");
-  IndentRAII x{};
+  HEADER(fp, "Uberblock:\n") {
+    PRINT(fp, "TXG: %08lx\n", ub.txg);
+    PRINT(fp, "timestamp: %lu\n", ub.timestamp);
+    PRINT(fp, "version: %lu\n", ub.version);
 
-  PRINT(fp, "TXG: %08lx\n", ub.txg);
-  PRINT(fp, "timestamp: %lu\n", ub.timestamp);
-  PRINT(fp, "version: %lu\n", ub.version);
-
-  Dump::blkptr(fp, ub.blkptr);
+    Dump::blkptr(fp, ub.blkptr);
+  }
 }
-
-/*Found Uberblock @ 00021000
-TXG:    4, timestamp: 1487966644, version: 5000
-BLKPTR: birth: 4
-vdev1: 0, grid: 0, asize: 1
-offset: 00004e00
-vdev1: 0, grid: 0, asize: 1
-offset: 0c004e00
-vdev1: 0, grid: 0, asize: 1
-offset: 18002600
-E: 1
-lvl: 00
-type: 0b
-cksum: 07
-comp: 03
-psize: 0f00
-lsize: 0000
-*/

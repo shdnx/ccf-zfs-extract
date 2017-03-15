@@ -1,3 +1,5 @@
+#include <cstdio>
+
 #include "zfs.h"
 
 bool Uberblock::readFrom(FILE *fp) {

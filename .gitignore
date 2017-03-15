@@ -1,2 +1,3 @@
-data/*
-cmake-build-debug/
+bin
+obj
+data

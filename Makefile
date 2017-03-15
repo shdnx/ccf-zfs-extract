@@ -21,7 +21,7 @@ clean:
 	rm -f $(BIN)
 
 obj/%.o: src/%.cpp
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -MMD $^ -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -MMD $< -o $@
 
 $(BIN): $(OBJS)
 	$(CXX) $(LDFLAGS) $^ -o $@

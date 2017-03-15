@@ -4,11 +4,6 @@
 
 #define UB_MAGIC 0x00BAB10C
 
-//#define BMASK_8(x)  ((x) & 0xff)
-//#define BMASK_16(x) ((x) & 0xffff)
-//#define BMASK_24(x) ((x) & 0xffffff)
-//#define BMASK_32(x) ((x) & 0xffffffff)
-
 struct Dva {
   uint32_t  asize : 24;
   uint8_t   grid;   
@@ -59,6 +54,4 @@ struct Uberblock {
   bool readFrom(FILE *fp);
 } __attribute__((packed));
 
-//#define VDA_GET_OFFSET(x) (((x.dva_word[1]) << 1) >> 1)
-
-#define SECTOR_TO_ADDR(x) (x << 9)// (((x) << 9) + 0x400000)
+#define SECTOR_TO_ADDR(x) ((x) << 9) // (((x) << 9) + 0x400000)

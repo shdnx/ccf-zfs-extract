@@ -20,6 +20,7 @@ int main(int argc, const char **argv) {
     if (ub.readFrom(fp)) {
       std::fprintf(stdout, "Found Uberblock @ %08lx\n", (size_t)(ftell(fp) - sizeof(Uberblock)));
       Dump::uberblock(stdout, ub);
+      std::fprintf(stdout, "\n");
     }
   }
 
