@@ -11,3 +11,11 @@ bool Uberblock::readFrom(FILE *fp) {
 
   return true;
 }
+
+std::unique_ptr<Uberblock> Uberblock::read(FILE *fp) {
+  auto ub = std::make_unique<Uberblock>();
+  if (!ub->readFrom(fp))
+    return nullptr;
+
+  return std::move(ub);
+}

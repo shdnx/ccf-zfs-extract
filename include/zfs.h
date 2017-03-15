@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include "common.h"
 
 #define UB_MAGIC 0x00BAB10C
@@ -51,6 +53,7 @@ struct Uberblock {
   uint64_t timestamp;
   Blkptr   blkptr;
 
+  static std::unique_ptr<Uberblock> read(FILE *fp);
   bool readFrom(FILE *fp);
 } __attribute__((packed));
 

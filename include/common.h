@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-extern "C" void exit(int code) __attribute__((noreturn));
+extern "C" void exit(int code) throw() __attribute__((noreturn));
 
 #define OUT /* empty */
 

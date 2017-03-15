@@ -1,5 +1,4 @@
 #include <cstdio>
-#include <memory>
 
 #include "common.h"
 #include "zfs.h"
@@ -12,14 +11,14 @@ int main(int argc, const char **argv) {
   FILE *fp = std::fopen(path, "rb");
   CRITICAL(fp, "Unable to open zpool file %s!\n", path);
 
-  //TODO: read all vdev labels for redundancy
-  for (int i = 0; i < 128; i++) {
-    std::fseek(fp, (128 + i)*1024, SEEK_SET);
+  // TODO: read all vdev labels for redundancy
+  for (size_t i = 0; i < 128; i++) {
+    std::fseek(fp, (128 + i) * 1024, SEEK_SET);
 
-    Uberblock ub;
-    if (ub.readFrom(fp)) {
+    auto ub = Uberblock::read(fp);
+    if (ub) {
       std::fprintf(stdout, "Found Uberblock @ %08lx\n", (size_t)(ftell(fp) - sizeof(Uberblock)));
-      Dump::uberblock(stdout, ub);
+      Dump::uberblock(stdout, *ub);
       std::fprintf(stdout, "\n");
     }
   }
