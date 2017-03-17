@@ -29,28 +29,47 @@ template <typename T> static void dump_raw(FILE *fp, const T &obj) {
 }
 
 static void handle_ub(FILE *fp, const Uberblock &ub) {
-  size_t ub_offset = static_cast<size_t>(ftell(fp) - sizeof(Uberblock));
+  const size_t ub_offset = static_cast<size_t>(ftell(fp) - sizeof(Uberblock));
 
   std::fprintf(stdout, "Found Uberblock @ %08lx\n", ub_offset);
   Dump::uberblock(stderr, ub);
   std::fprintf(stderr, "\n");
 
-  if (ub.blkptr.props.type != BlkptrType::ObjSet) {
-    std::fprintf(
-        stderr,
-        "Uberblock blkptr does not seem to point to an objset, ignoring!\n");
+  if (ub.rootbp.props.type != BlkptrType::ObjSet) {
+    std::fprintf(stderr,
+                 "rootbp does not seem to point to an objset, ignoring!\n");
+    return;
+  }
+
+  if (ub.rootbp.props.endian != Endianness::Little) {
+    std::fprintf(stderr, "rootbp not little endian, ignoring!\n");
     return;
   }
 
   DNode metadnode;
-  if (!read_obj(fp, ub.blkptr.vdev[0].offset, OUT & metadnode)) {
-    std::fprintf(stderr,
-                 "Uberblock blkptr.vdev[0]: could not read metadnode!\n");
-    return;
-  }
 
-  fprintf(stdout, "metadnode raw dump:\n");
-  dump_raw(stdout, metadnode);
+  for (size_t vdev = 0; vdev < 1; vdev++) {
+    std::fprintf(stdout, "\n ------ VDEV %zu ------ \n", vdev);
+
+    if (!read_obj(fp, ub.rootbp.vdev[vdev].offset, OUT & metadnode)) {
+      std::fprintf(stderr,
+                   "Uberblock rootbp.vdev[%zu]: could not read metadnode!\n",
+                   vdev);
+      continue;
+    }
+
+    if (metadnode.nblkptr < 1 || 3 < metadnode.nblkptr) {
+      std::fprintf(stderr,
+                   "Ignored probably invalid metadnode, nblkptr = %02hhx\n",
+                   metadnode.nblkptr);
+      continue;
+    }
+
+    // fprintf(stdout, "metadnode raw dump:\n");
+    // dump_raw(stdout, metadnode);
+
+    Dump::dnode(stderr, metadnode);
+  }
 }
 
 int main(int argc, const char **argv) {
@@ -67,7 +86,6 @@ int main(int argc, const char **argv) {
     auto ub = Uberblock::read(fp);
     if (ub) {
       handle_ub(fp, *ub);
-      break;
     }
   }
 
