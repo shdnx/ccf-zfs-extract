@@ -9,9 +9,7 @@ struct IndentRAII {
     g_indent += m_offset;
   }
 
-  ~IndentRAII() {
-    g_indent -= m_offset;
-  }
+  ~IndentRAII() { g_indent -= m_offset; }
 };
 
 #define INDENTED_IMPL(CNT) \
@@ -20,29 +18,55 @@ struct IndentRAII {
 
 #define INDENTED INDENTED_IMPL(__COUNTER__)
 
-#define PRINT(fp, ...) \
-  do { \
+#define PRINT(fp, ...)                         \
+  do {                                         \
     std::fprintf(fp, "%*s", g_indent * 4, ""); \
-    std::fprintf(fp, __VA_ARGS__); \
+    std::fprintf(fp, __VA_ARGS__);             \
   } while (0)
 
-#define HEADER(fp, ...) PRINT(fp, __VA_ARGS__); INDENTED
+#define HEADER(fp, ...)   \
+  PRINT(fp, __VA_ARGS__); \
+  INDENTED
+
+static constexpr const char *getDefaultFormat(size_t fieldSize) {
+#define PREFIX "%-15s = "
+#define SUFFIX "\n"
+
+  switch (fieldSize) {
+  case 8:
+    return PREFIX "%016lx" SUFFIX;
+  case 4:
+    return PREFIX "%08x" SUFFIX;
+  case 2:
+    return PREFIX "%04hx" SUFFIX;
+  case 1:
+    return PREFIX "%d" SUFFIX;
+  default:
+    return nullptr;
+  }
+
+#undef SUFFIX
+#undef PREFIX
+}
+
+#define DUMP(FP, OBJ, FIELD) \
+  PRINT((FP), getDefaultFormat(sizeof((OBJ).FIELD)), #FIELD, (OBJ).FIELD)
 
 void Dump::dva(FILE *fp, const Dva &dva) {
-  PRINT(fp, "vdev = %08x\n", dva.vdev);
+  DUMP(fp, dva, vdev);
   PRINT(fp, "grid = %hhx\n", dva.grid);
   PRINT(fp, "asize = %08x\n", dva.asize);
   PRINT(fp, "offset = %016lx\n", dva.offset);
   PRINT(fp, "gang = %d\n", dva.gang_block);
 }
 
-void Dump::blkptr_props(FILE *fp, const Props &props) {
+void Dump::blkptr_props(FILE *fp, const BlkptrProps &props) {
   HEADER(fp, "Props:\n") {
     PRINT(fp, "lsize = %04hx, psize = %04hx\n", props.lsize, props.psize);
     PRINT(fp, "comp = %02hhx\n", props.comp);
     PRINT(fp, "embedded = %d\n", props.embedded);
     PRINT(fp, "cksum = %02hhx\n", props.cksum);
-    PRINT(fp, "type = %02hhx\n", props.type);
+    PRINT(fp, "type = %02hhx\n", static_cast<uint8_t>(props.type));
     PRINT(fp, "lvl = %02hhx\n", props.lvl);
     PRINT(fp, "encrypt = %d\n", props.encrypt);
     PRINT(fp, "dedup = %d\n", props.dedup);
@@ -55,9 +79,7 @@ void Dump::blkptr(FILE *fp, const Blkptr &blkptr) {
     Dump::blkptr_props(fp, blkptr.props);
 
     for (size_t i = 0; i < 3; i++) {
-      HEADER(fp, "vdev[%zu]:\n", i) {
-        Dump::dva(fp, blkptr.vdev[i]);
-      }
+      HEADER(fp, "vdev[%zu]:\n", i) { Dump::dva(fp, blkptr.vdev[i]); }
     }
   }
 }

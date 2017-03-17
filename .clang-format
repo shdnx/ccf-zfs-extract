@@ -1,0 +1,7 @@
+BasedOnStyle: LLVM
+IndentWidth: 2
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+AlignEscapedNewlinesLeft: true
+BraceWrapping:
+  AfterEnum: true
