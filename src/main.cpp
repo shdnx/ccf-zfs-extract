@@ -69,9 +69,11 @@ static bool read_compressed_obj(FILE *fp, size_t addr, size_t phys_size,
 }
 
 template <typename TObj>
-static bool read_compressed_obj(FILE *fp, const Blkptr &bp, OUT TObj *obj) {
-  return read_compressed_obj(fp, bp.vdev[0].getAddress(), bp.getPhysicalSize(),
-                             bp.getLogicalSize(), OUT obj);
+static bool read_compressed_obj(FILE *fp, const Blkptr &bp, size_t vdev_index,
+                                OUT TObj *obj) {
+  return read_compressed_obj(fp, bp.vdev[vdev_index].getAddress(),
+                             bp.getPhysicalSize(), bp.getLogicalSize(),
+                             OUT obj);
 }
 
 static void dump_raw(FILE *fp, const void *ptr, size_t sz) {
@@ -104,12 +106,27 @@ static void handle_ub(FILE *fp, const Uberblock &ub) {
     return;
   }
 
-  DNode metadnode;
-  CRITICAL(read_compressed_obj(fp, ub.rootbp, OUT & metadnode),
-           "Uberblock rootbp: could not read metadnode!\n");
+  ObjSet objset;
 
-  assert(1 <= metadnode.nblkptr && metadnode.nblkptr <= 3);
-  Dump::dnode(stderr, metadnode);
+  for (size_t vdev_index = 0; vdev_index < 1; vdev_index++) {
+    std::fprintf(stderr, "vdev = %zu\n", vdev_index);
+
+    CRITICAL(read_compressed_obj(fp, ub.rootbp, vdev_index, OUT & objset),
+             "Uberblock rootbp: could not read root objset!\n");
+
+    assert(1 <= objset.metadnode.nblkptr && objset.metadnode.nblkptr <= 3);
+    Dump::objset(stderr, objset);
+
+    DNode dnode;
+    for (size_t blkptr_index = 0; blkptr_index < objset.metadnode.nblkptr;
+         blkptr_index++) {
+      CRITICAL(read_compressed_obj(fp, objset.metadnode.bps[blkptr_index], 0,
+                                   OUT & dnode),
+               "Could not follow blkptr in root objset's metadnode!\n");
+
+      Dump::dnode(stderr, dnode);
+    }
+  }
 }
 
 int main(int argc, const char **argv) {

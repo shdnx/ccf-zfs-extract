@@ -94,14 +94,6 @@ enum class DNodeType : u8 {
 };
 
 struct DNode {
-  /*u8        pad[1];
-  u8        phys_comp; // physical compress flag?
-  u8        checksum;
-  u8        bonustype;
-  u8        nblkptr; // number of block pointers
-  u8        nlevels; // number of levels of indirection
-  u8        indblkshift;
-  DNodeType type;*/
   DNodeType type;
   u8        indblkshift;
   u8        nlevels; // number of levels of indirection
@@ -110,16 +102,10 @@ struct DNode {
   u8        checksum;
   u8        phys_comp; // physical compress flag?
   u8        flags;
-  // u8        pad[1];    // flags??
 
   u16 data_blk_size_secs;
   u16 bonuslen;
   PADDING(4);
-
-  /*u8  pad2[3];
-  u8  extra_slots;
-  u16 bonuslen;
-  u16 flags;*/
 
   u64 max_block_id;
   u64 secphys_used;
@@ -132,3 +118,10 @@ struct DNode {
 } __attribute__((packed));
 
 static_assert(sizeof(DNode) == 512, "DNode!");
+
+struct ObjSet {
+  DNode metadnode;
+  PADDING(8 * sizeof(u64)); // TODO: zil_header
+  u64 type;
+  PADDING(376);
+} __attribute__((packed));

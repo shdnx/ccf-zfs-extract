@@ -139,5 +139,17 @@ void Dump::dnode(FILE *fp, const DNode &dnode) {
     DUMP_FIELD(flags);
     DUMP_FIELD(max_block_id);
     DUMP_FIELD(secphys_used);
+
+    for (size_t i = 0; i < dnode.nblkptr; i++) {
+      HEADER(fp, "bps[%zu]:\n", i) { Dump::blkptr(fp, dnode.bps[i]); }
+    }
+  }
+}
+
+void Dump::objset(FILE *fp, const ObjSet &objset) {
+  OBJECT_HEADER(fp, objset, "ObjSet:\n") {
+    DUMP_FIELD(type);
+
+    HEADER(fp, "metadnode:\n") { Dump::dnode(fp, objset.metadnode); }
   }
 }
