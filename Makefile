@@ -1,7 +1,7 @@
 CXX = g++
 CXXFLAGS = -std=c++14 -ggdb -O0 -Wall -Wextra
-INCLUDES = -Iinclude
-LDFLAGS = 
+INCLUDES = -Iinclude -Ideps/lz4xx/include
+LDFLAGS = -Ldeps/lz4xx/build -Wl,-whole-archive -l:liblz4xx.a -Wl,-no-whole-archive
 
 SRCS = $(wildcard src/*.cpp)
 OBJS = $(patsubst src/%.cpp,obj/%.o,$(SRCS))
