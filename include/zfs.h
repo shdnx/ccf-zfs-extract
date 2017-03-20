@@ -5,9 +5,15 @@
 #include "common.h"
 
 #define UB_MAGIC 0x00BAB10C
+
 #define SECTOR_SHIFT 9
 #define SECTOR_SIZE (1 << SECTOR_SHIFT)
 #define SECTOR_TO_ADDR(x) (((x) << SECTOR_SHIFT) + (4 * MB))
+
+// Apparently, ZFS on Linux stores 1 less value in the lsize and psize fields
+// than the actual value. They call this 'bias', we just call it 'bullshit'.
+#define BLKPTR_SIZE_BIAS 1
+#define BLKPTR_SIZE_SHIFT SECTOR_SHIFT
 
 struct Dva {
   u32 asize : 24;
@@ -33,12 +39,10 @@ enum class BlkptrType : u8 {
 
 enum class Endianness : bool { Little = 1, Big = 0 };
 
-// Apparently, ZFS on Linux stores 1 less value in the lsize and psize fields
-// than the actual value. They call this 'bias', we just call it 'bullshit'.
-#define BLKPTR_SIZE_BIAS 1
-#define BLKPTR_SIZE_SHIFT SECTOR_SHIFT
+struct Blkptr {
+  Dva vdev[3];
 
-struct BlkptrProps {
+  // -- props --
   u16  lsize;
   u16  psize;
   u8   comp : 7;
@@ -50,29 +54,20 @@ struct BlkptrProps {
   bool       encrypt : 1;
   bool       dedup : 1;
   Endianness endian : 1;
-
-  size_t getLSize() const {
-    return (static_cast<size_t>(lsize) + BLKPTR_SIZE_BIAS) << BLKPTR_SIZE_SHIFT;
-  }
-
-  size_t getPSize() const {
-    return (static_cast<size_t>(psize) + BLKPTR_SIZE_BIAS) << BLKPTR_SIZE_SHIFT;
-  }
-} __attribute__((packed));
-
-static_assert(sizeof(BlkptrProps) == 8, "Props definition incorrect!");
-
-struct Blkptr {
-  Dva         vdev[3];
-  BlkptrProps props;
+  // -- end props --
 
   PADDING(3 * sizeof(u64));
   u64 birth_txg;
   u64 fill;
   u8  checksum[32];
 
-  size_t getLogicalSize() const { return props.getLSize(); }
-  size_t getPhysicalSize() const { return props.getPSize(); }
+  size_t getLogicalSize() const {
+    return (static_cast<size_t>(lsize) + BLKPTR_SIZE_BIAS) << BLKPTR_SIZE_SHIFT;
+  }
+
+  size_t getPhysicalSize() const {
+    return (static_cast<size_t>(psize) + BLKPTR_SIZE_BIAS) << BLKPTR_SIZE_SHIFT;
+  }
 } __attribute__((packed));
 
 static_assert(sizeof(Blkptr) == 128, "Blkptr definition incorrect!");

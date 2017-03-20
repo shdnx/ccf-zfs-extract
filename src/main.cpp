@@ -1,4 +1,3 @@
-#include <cassert>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -7,6 +6,7 @@
 #include "lz4.h"
 
 #include "common.h"
+#include "file.h"
 #include "zfs-dump.h"
 #include "zfs.h"
 
@@ -22,7 +22,7 @@ template <typename T> static bool read_obj(FILE *fp, size_t secno, OUT T *obj) {
   return true;
 }
 
-// stolen from byteorder.h in linux-on-zfs source tree
+// blatantly stolen from byteorder.h in linux-on-zfs source tree
 #define BE_IN8(xa) *((uint8_t *)(xa))
 
 #define BE_IN16(xa) (((uint16_t)BE_IN8(xa) << 8) | BE_IN8((uint8_t *)(xa) + 1))
@@ -36,7 +36,8 @@ template <typename T> static bool read_obj(FILE *fp, size_t secno, OUT T *obj) {
 template <typename T>
 static bool read_compressed_obj(FILE *fp, size_t addr, size_t phys_size,
                                 size_t logical_size, OUT T *obj) {
-  assert(phys_size % SECTOR_SIZE == 0);
+  ASSERT(phys_size % SECTOR_SIZE == 0, "Non-sector aligned physical size: %zu",
+         phys_size);
 
   std::unique_ptr<char[]> ibuffer{new char[phys_size]};
 
@@ -58,7 +59,9 @@ static bool read_compressed_obj(FILE *fp, size_t addr, size_t phys_size,
 
   u32 *     ibuffer_raw     = reinterpret_cast<u32 *>(ibuffer.get());
   const u32 compressed_size = BE_IN32(ibuffer_raw);
-  assert(logical_size > compressed_size + sizeof(compressed_size));
+  ASSERT(logical_size > compressed_size + sizeof(compressed_size),
+         "Invalid logical size %zu: lower than the compressed size %zu",
+         logical_size, compressed_size);
 
   const int nbytes = LZ4_decompress_safe(
       reinterpret_cast<const char *>(&ibuffer_raw[1]), obuffer.get(),
@@ -77,10 +80,10 @@ static bool read_compressed_obj(FILE *fp, const Blkptr &bp, size_t vdev_index,
 }
 
 static void dump_raw(FILE *fp, const void *ptr, size_t sz) {
-  assert(sz % 8 == 0);
+  ASSERT0(sz % 8 == 0);
 
   for (size_t i = 0, nqwords = sz / 8; i < nqwords; i++) {
-    fprintf(fp, "%016lx\n", static_cast<const u64 *>(ptr)[i]);
+    std::fprintf(fp, "%016lx\n", static_cast<const u64 *>(ptr)[i]);
   }
 }
 
@@ -95,34 +98,28 @@ static void handle_ub(FILE *fp, const Uberblock &ub) {
   Dump::uberblock(stderr, ub);
   std::fprintf(stderr, "\n");
 
-  if (ub.rootbp.props.type != BlkptrType::ObjSet) {
-    std::fprintf(stderr,
-                 "rootbp does not seem to point to an objset, ignoring!\n");
-    return;
-  }
-
-  if (ub.rootbp.props.endian != Endianness::Little) {
-    std::fprintf(stderr, "rootbp not little endian, ignoring!\n");
-    return;
-  }
+  ASSERT(ub.rootbp.type == BlkptrType::ObjSet,
+         "rootbp does not seem to point to an object!");
+  ASSERT(ub.rootbp.endian == Endianness::Little, "rootbp not little endian!");
 
   ObjSet objset;
-
   for (size_t vdev_index = 0; vdev_index < 1; vdev_index++) {
     std::fprintf(stderr, "vdev = %zu\n", vdev_index);
 
-    CRITICAL(read_compressed_obj(fp, ub.rootbp, vdev_index, OUT & objset),
-             "Uberblock rootbp: could not read root objset!\n");
+    ASSERT(read_compressed_obj(fp, ub.rootbp, vdev_index, OUT & objset),
+           "Uberblock rootbp: could not read root objset!");
 
-    assert(1 <= objset.metadnode.nblkptr && objset.metadnode.nblkptr <= 3);
+    ASSERT(1 <= objset.metadnode.nblkptr && objset.metadnode.nblkptr <= 3,
+           "DNode sanity check failure with nlkptr = %zu",
+           objset.metadnode.nblkptr);
     Dump::objset(stderr, objset);
 
     DNode dnode;
     for (size_t blkptr_index = 0; blkptr_index < objset.metadnode.nblkptr;
          blkptr_index++) {
-      CRITICAL(read_compressed_obj(fp, objset.metadnode.bps[blkptr_index], 0,
-                                   OUT & dnode),
-               "Could not follow blkptr in root objset's metadnode!\n");
+      ASSERT(read_compressed_obj(fp, objset.metadnode.bps[blkptr_index], 0,
+                                 OUT & dnode),
+             "Could not follow blkptr in root objset's metadnode!");
 
       Dump::dnode(stderr, dnode);
     }
@@ -130,11 +127,11 @@ static void handle_ub(FILE *fp, const Uberblock &ub) {
 }
 
 int main(int argc, const char **argv) {
-  CRITICAL(argc > 1, "Usage: %s <zpool-file-path>\n", argv[0]);
+  ASSERT(argc > 1, "Usage: %s <zpool-file-path>\n", argv[0]);
 
   const char *path = argv[1];
-  FILE *      fp   = std::fopen(path, "rb");
-  CRITICAL(fp, "Unable to open zpool file %s!\n", path);
+  File        fp{path, File::Read};
+  ASSERT(fp, "Unable to open zpool file %s!\n", path);
 
   std::vector<std::unique_ptr<Uberblock>> ubs(128);
   ssize_t                                 max_txg_index = -1;
@@ -152,8 +149,11 @@ int main(int argc, const char **argv) {
     }
   }
 
-  handle_ub(fp, *ubs[max_txg_index]);
+  if (max_txg_index == -1) {
+    std::fprintf(stderr, "No valid uberblocks found!\n");
+    return 1;
+  }
 
-  std::fclose(fp);
+  handle_ub(fp, *ubs[max_txg_index]);
   return 0;
 }

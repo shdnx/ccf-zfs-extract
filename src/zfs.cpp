@@ -3,8 +3,8 @@
 #include "zfs.h"
 
 bool Uberblock::readFrom(FILE *fp) {
-  size_t nread = fread(this, sizeof(Uberblock), 1, fp);
-  CRITICAL(nread == 1, "Failed to read uberblock!\n");
+  size_t nread = std::fread(this, sizeof(Uberblock), 1, fp);
+  ASSERT(nread == 1, "Failed to read uberblock!");
 
   if (magic != UB_MAGIC)
     return false;

@@ -2,9 +2,14 @@
 
 // ---- DSL magic, you do not want to be here ----
 
-static unsigned g_indent = 0;
+static unsigned g_indent          = 0;
+static bool     g_suppress_indent = false;
 
 #define INDENT_LENGTH 4
+#define FMT64 "0x%016lx"
+#define FMT32 "0x%08x"
+#define FMT16 "0x%04hx"
+#define FMT8 "0x%02hhx"
 
 struct IndentRAII {
   int  m_offset;
@@ -17,20 +22,35 @@ struct IndentRAII {
   ~IndentRAII() { g_indent -= m_offset; }
 };
 
-#define _INDENTED_IMPL(OBJNAME) \
-  for (IndentRAII OBJNAME; OBJNAME.m_flag; OBJNAME.m_flag = false)
+#define _INDENTED_IMPL(VAL, OBJNAME) \
+  for (IndentRAII OBJNAME{(VAL)}; OBJNAME.m_flag; OBJNAME.m_flag = false)
 
-#define INDENTED _INDENTED_IMPL(CONCAT2(__indent, __COUNTER__))
+#define INDENTED(VAL) _INDENTED_IMPL(VAL, CONCAT2(__indent, __COUNTER__))
 
-#define PRINT(fp, ...)                                    \
-  do {                                                    \
-    std::fprintf(fp, "%*s", g_indent *INDENT_LENGTH, ""); \
-    std::fprintf(fp, __VA_ARGS__);                        \
+#define PRINT_INDENT(fp)                                    \
+  do {                                                      \
+    if (!g_suppress_indent)                                 \
+      std::fprintf(fp, "%*s", g_indent *INDENT_LENGTH, ""); \
+    g_suppress_indent = false;                              \
+  } while (0)
+
+#define PRINT(fp, ...)             \
+  do {                             \
+    PRINT_INDENT(fp);              \
+    std::fprintf(fp, __VA_ARGS__); \
   } while (0)
 
 #define HEADER(fp, ...)   \
   PRINT(fp, __VA_ARGS__); \
-  INDENTED
+  INDENTED(1)
+
+#define _ONCE_IMPL(VARNAME) for (bool VARNAME = true; VARNAME; VARNAME = false)
+#define ONCE() _ONCE_IMPL(CONCAT2(__once, __COUNTER__))
+
+#define INLINE_HEADER(FP, ...) \
+  PRINT(FP, __VA_ARGS__);      \
+  g_suppress_indent = true;    \
+  ONCE()
 
 static constexpr const char *getDefaultFormat(size_t fieldSize) {
 #define PREFIX "%-15s = "
@@ -38,13 +58,13 @@ static constexpr const char *getDefaultFormat(size_t fieldSize) {
 
   switch (fieldSize) {
   case 8:
-    return PREFIX "0x%016lx" SUFFIX;
+    return PREFIX FMT64 SUFFIX;
   case 4:
-    return PREFIX "0x%08x" SUFFIX;
+    return PREFIX FMT32 SUFFIX;
   case 2:
-    return PREFIX "0x%04hx" SUFFIX;
+    return PREFIX FMT16 SUFFIX;
   case 1:
-    return PREFIX "%d" SUFFIX;
+    return PREFIX FMT8 SUFFIX;
   default:
     return nullptr;
   }
@@ -85,46 +105,34 @@ static inline DumpCtx<TObj> make_dump_ctx(FILE *fp, const TObj &obj) {
 // ----- end DSL magic ------
 
 void Dump::dva(FILE *fp, const Dva &dva) {
-  OBJECT_HEADER(fp, dva, "DVA:\n") {
-    DUMP_FIELD(vdev);
-    DUMP_FIELD(offset);
-    DUMP_FIELD(asize);
-  }
-}
-
-void Dump::blkptr_props(FILE *fp, const BlkptrProps &props) {
-  OBJECT_HEADER(fp, props, "BLKPTR Props:\n") {
-    DUMP_FIELD(lsize);
-    DUMP_FIELD(psize);
-    DUMP_FIELD(comp);
-    DUMP_FIELD(cksum);
-    DUMP_FIELD(type);
-    DUMP_FIELD(endian);
-  }
+  HEADER(fp, "DVA <0x%x:0x%lx:0x%x>\n", dva.vdev, dva.offset, dva.asize) {}
 }
 
 void Dump::blkptr(FILE *fp, const Blkptr &blkptr) {
-  HEADER(fp, "BLKPTR:\n") {
+  HEADER(fp, "BLKPTR <L:0x%lx, P:0x%lx>:\n", blkptr.getLogicalSize(),
+         blkptr.getPhysicalSize()) {
     DUMP_OBJECT(fp, blkptr) {
+      DUMP_FIELD(type);
+      DUMP_FIELD(comp);
+      DUMP_FIELD(cksum);
       DUMP_FIELD(fill);
       DUMP_FIELD(birth_txg);
-    }
 
-    Dump::blkptr_props(fp, blkptr.props);
-
-    for (size_t i = 0; i < 3; i++) {
-      HEADER(fp, "vdev[%zu]:\n", i) { Dump::dva(fp, blkptr.vdev[i]); }
+      for (size_t i = 0; i < 3; i++) {
+        INLINE_HEADER(fp, "vdev[%zu]: ", i) { Dump::dva(fp, blkptr.vdev[i]); }
+      }
     }
   }
 }
 
 void Dump::uberblock(FILE *fp, const Uberblock &ub) {
-  OBJECT_HEADER(fp, ub, "Uberblock:\n") {
-    DUMP_FIELD(txg);
-    DUMP_FIELD(timestamp);
-    DUMP_FIELD(version);
+  HEADER(fp, "Uberblock 0x%lx:\n", ub.txg) {
+    DUMP_OBJECT(fp, ub) {
+      DUMP_FIELD(timestamp);
+      DUMP_FIELD(version);
+    }
 
-    Dump::blkptr(fp, ub.rootbp);
+    INLINE_HEADER(fp, "rootbp: ") { Dump::blkptr(fp, ub.rootbp); }
   }
 }
 
@@ -141,15 +149,15 @@ void Dump::dnode(FILE *fp, const DNode &dnode) {
     DUMP_FIELD(secphys_used);
 
     for (size_t i = 0; i < dnode.nblkptr; i++) {
-      HEADER(fp, "bps[%zu]:\n", i) { Dump::blkptr(fp, dnode.bps[i]); }
+      INLINE_HEADER(fp, "bps[%zu]: ", i) { Dump::blkptr(fp, dnode.bps[i]); }
     }
   }
 }
 
 void Dump::objset(FILE *fp, const ObjSet &objset) {
-  OBJECT_HEADER(fp, objset, "ObjSet:\n") {
-    DUMP_FIELD(type);
+  HEADER(fp, "ObjSet:\n") {
+    DUMP_OBJECT(fp, objset) { DUMP_FIELD(type); }
 
-    HEADER(fp, "metadnode:\n") { Dump::dnode(fp, objset.metadnode); }
+    INLINE_HEADER(fp, "metadnode: ") { Dump::dnode(fp, objset.metadnode); }
   }
 }

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cassert>
 #include <cstdint>
 
 using i8  = std::int8_t;
@@ -18,20 +17,34 @@ using u64 = std::uint64_t;
 #define GB (MB * 1024uL)
 #define TB (GB * 1024uL)
 
-extern "C" void exit(int code) throw() __attribute__((noreturn));
+#define OUT   /* empty */
+#define INOUT /* empty */
 
-#define OUT /* empty */
+void _assert_fail(const char *cond, const char *func, const char *file,
+                  int line, const char *format, ...) __attribute__((noreturn));
 
-#define CRITICAL(COND, ...)                                     \
-  do {                                                          \
-    if (!(COND)) {                                              \
-      std::fprintf(stderr, "Critical failure in %s at %s:%d: ", \
-                   __PRETTY_FUNCTION__, __FILE__, __LINE__);    \
-      std::fprintf(stderr, __VA_ARGS__);                        \
-      exit(1);                                                  \
-    }                                                           \
+void _unreachable_fail(const char *func, const char *file, int line,
+                       const char *format, ...) __attribute__((noreturn));
+
+// ASSERT(condition, message format, message args...)
+#define ASSERT(COND, ...)                                          \
+  do {                                                             \
+    if (!(COND))                                                   \
+      _assert_fail(#COND, __PRETTY_FUNCTION__, __FILE__, __LINE__, \
+                   __VA_ARGS__);                                   \
   } while (0)
 
+#define ASSERT0(COND) ASSERT(COND, "C'thulu has arisen (sanity check failure)")
+
+// UNREACHABLE(message format, message args...)
+#define UNREACHABLE(...)                                                     \
+  do {                                                                       \
+    _unreachable_fail(__PRETTY_FUNCTION__, __FILE__, __LINE__, __VA_ARGS__); \
+    __builtin_unreachable();                                                 \
+  } while (0)
+
+// When you REALLY think you know what you're doing, such as turning a bunny
+// into a refrigator.
 #define REINTERPRET(WHAT, TYPE) (*reinterpret_cast<TYPE *>(&(WHAT)))
 
 #define _CONCAT2_IMPL(A, B) A##B
@@ -40,5 +53,4 @@ extern "C" void exit(int code) throw() __attribute__((noreturn));
 #define _CONCAT3_IMPL(A, B, C) A##B##C
 #define CONCAT3(A, B, C) _CONCAT3_IMPL(A, B, C)
 
-#define _PADDING_IMPL(NAME, NBYTES) u8 NAME[NBYTES]
-#define PADDING(NBYTES) _PADDING_IMPL(CONCAT2(_pad, __COUNTER__), NBYTES)
+#define PADDING(NBYTES) u8 CONCAT2(_pad, __COUNTER__)[NBYTES]
