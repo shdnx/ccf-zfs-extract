@@ -1,4 +1,6 @@
-#include "zfs-dump.h"
+#include <cstdio>
+
+#include "zfs-objects.h"
 
 // ---- DSL magic, you do not want to be here ----
 
@@ -15,7 +17,7 @@ struct IndentRAII {
   int  m_offset;
   bool m_flag = true;
 
-  IndentRAII(int indent_offset = 1) : m_offset{indent_offset} {
+  explicit IndentRAII(int indent_offset = 1) : m_offset{indent_offset} {
     g_indent += m_offset;
   }
 
@@ -27,16 +29,15 @@ struct IndentRAII {
 
 #define INDENTED(VAL) _INDENTED_IMPL(VAL, CONCAT2(__indent, __COUNTER__))
 
-#define PRINT_INDENT(fp)                                    \
-  do {                                                      \
-    if (!g_suppress_indent)                                 \
-      std::fprintf(fp, "%*s", g_indent *INDENT_LENGTH, ""); \
-    g_suppress_indent = false;                              \
-  } while (0)
+static void print_indent(FILE *fp) {
+  if (!g_suppress_indent)
+    std::fprintf(fp, "%*s", g_indent * INDENT_LENGTH, "");
+  g_suppress_indent = false;
+}
 
 #define PRINT(fp, ...)             \
   do {                             \
-    PRINT_INDENT(fp);              \
+    print_indent(fp);              \
     std::fprintf(fp, __VA_ARGS__); \
   } while (0)
 
@@ -52,7 +53,7 @@ struct IndentRAII {
   g_suppress_indent = true;    \
   ONCE()
 
-static constexpr const char *getDefaultFormat(size_t fieldSize) {
+static constexpr const char *getFieldFormat(size_t fieldSize) {
 #define PREFIX "%-15s = "
 #define SUFFIX "\n"
 
@@ -76,24 +77,24 @@ static constexpr const char *getDefaultFormat(size_t fieldSize) {
 #define DUMP(FP, OBJ, FIELD)                                      \
   do {                                                            \
     const auto __val = (OBJ).FIELD; /* to get around bitfields */ \
-    PRINT((FP), getDefaultFormat(sizeof(__val)), #FIELD, __val);  \
+    PRINT((FP), getFieldFormat(sizeof(__val)), #FIELD, __val);    \
   } while (0)
 
-template <typename TObj> struct DumpCtx {
+template <typename TObj> struct DumpObjCtx {
   FILE *      fp;
   const TObj *obj;
   bool        run = true;
 
-  explicit DumpCtx(FILE *fp_, const TObj *obj_) : fp{fp_}, obj{obj_} {}
+  explicit DumpObjCtx(FILE *fp_, const TObj *obj_) : fp{fp_}, obj{obj_} {}
 };
 
 template <typename TObj>
-static inline DumpCtx<TObj> make_dump_ctx(FILE *fp, const TObj &obj) {
-  return DumpCtx<TObj>{fp, &obj};
+static inline DumpObjCtx<TObj> make_obj_ctx(FILE *fp, const TObj &obj) {
+  return DumpObjCtx<TObj>{fp, &obj};
 }
 
-#define DUMP_OBJECT(FP, OBJ)                                       \
-  for (auto __dumpctx = make_dump_ctx((FP), (OBJ)); __dumpctx.run; \
+#define DUMP_OBJECT(FP, OBJ)                                      \
+  for (auto __dumpctx = make_obj_ctx((FP), (OBJ)); __dumpctx.run; \
        __dumpctx.run  = false)
 
 #define OBJECT_HEADER(FP, OBJ, TITLE) \
@@ -104,14 +105,22 @@ static inline DumpCtx<TObj> make_dump_ctx(FILE *fp, const TObj &obj) {
 
 // ----- end DSL magic ------
 
-void Dump::dva(FILE *fp, const Dva &dva) {
-  HEADER(fp, "DVA <0x%x:0x%lx:0x%x>\n", dva.vdev, dva.offset, dva.asize) {}
+template <typename TObj> static void checkValid(FILE *fp, const TObj *obj) {
+  if (!obj->validate()) {
+    PRINT(fp, "!! WARNING: failed validation: %s\n", TObj::validation_expr);
+  }
 }
 
-void Dump::blkptr(FILE *fp, const Blkptr &blkptr) {
-  HEADER(fp, "BLKPTR <L:0x%lx, P:0x%lx>:\n", blkptr.getLogicalSize(),
-         blkptr.getPhysicalSize()) {
-    DUMP_OBJECT(fp, blkptr) {
+void Dva::dump(FILE *fp) const {
+  HEADER(fp, "DVA <0x%x:0x%lx:0x%x>\n", vdev, offset, asize) {
+    checkValid(fp, this);
+  }
+}
+
+void Blkptr::dump(FILE *fp) const {
+  HEADER(fp, "BLKPTR <L:0x%lx, P:0x%lx>:\n", getLogicalSize(),
+         getPhysicalSize()) {
+    DUMP_OBJECT(fp, *this) {
       DUMP_FIELD(type);
       DUMP_FIELD(comp);
       DUMP_FIELD(cksum);
@@ -119,25 +128,29 @@ void Dump::blkptr(FILE *fp, const Blkptr &blkptr) {
       DUMP_FIELD(birth_txg);
 
       for (size_t i = 0; i < 3; i++) {
-        INLINE_HEADER(fp, "vdev[%zu]: ", i) { Dump::dva(fp, blkptr.vdev[i]); }
+        INLINE_HEADER(fp, "vdev[%zu]: ", i) { vdev[i].dump(fp); }
       }
     }
+
+    checkValid(fp, this);
   }
 }
 
-void Dump::uberblock(FILE *fp, const Uberblock &ub) {
-  HEADER(fp, "Uberblock 0x%lx:\n", ub.txg) {
-    DUMP_OBJECT(fp, ub) {
+void Uberblock::dump(FILE *fp) const {
+  HEADER(fp, "Uberblock 0x%lx:\n", txg) {
+    DUMP_OBJECT(fp, *this) {
       DUMP_FIELD(timestamp);
-      DUMP_FIELD(version);
+      DUMP_FIELD(spa_version);
     }
 
-    INLINE_HEADER(fp, "rootbp: ") { Dump::blkptr(fp, ub.rootbp); }
+    INLINE_HEADER(fp, "rootbp: ") { rootbp.dump(fp); }
+
+    checkValid(fp, this);
   }
 }
 
-void Dump::dnode(FILE *fp, const DNode &dnode) {
-  OBJECT_HEADER(fp, dnode, "DNode:\n") {
+void DNode::dump(FILE *fp) const {
+  OBJECT_HEADER(fp, *this, "DNode:\n") {
     DUMP_FIELD(phys_comp);
     DUMP_FIELD(checksum);
     DUMP_FIELD(nblkptr);
@@ -148,16 +161,20 @@ void Dump::dnode(FILE *fp, const DNode &dnode) {
     DUMP_FIELD(max_block_id);
     DUMP_FIELD(secphys_used);
 
-    for (size_t i = 0; i < dnode.nblkptr; i++) {
-      INLINE_HEADER(fp, "bps[%zu]: ", i) { Dump::blkptr(fp, dnode.bps[i]); }
+    for (size_t i = 0; i < nblkptr; i++) {
+      INLINE_HEADER(fp, "bps[%zu]: ", i) { bps[i].dump(fp); }
     }
+
+    checkValid(fp, this);
   }
 }
 
-void Dump::objset(FILE *fp, const ObjSet &objset) {
+void ObjSet::dump(FILE *fp) const {
   HEADER(fp, "ObjSet:\n") {
-    DUMP_OBJECT(fp, objset) { DUMP_FIELD(type); }
+    DUMP_OBJECT(fp, *this) { DUMP_FIELD(type); }
 
-    INLINE_HEADER(fp, "metadnode: ") { Dump::dnode(fp, objset.metadnode); }
+    INLINE_HEADER(fp, "metadnode: ") { metadnode.dump(fp); }
+
+    checkValid(fp, this);
   }
 }

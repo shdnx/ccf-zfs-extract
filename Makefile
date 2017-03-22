@@ -1,5 +1,5 @@
 CXX = g++
-CXXFLAGS = -std=c++14 -ggdb -O0 -Wall -Wextra
+CXXFLAGS = -DDEBUG -std=c++14 -ggdb -O0 -Wall -Wextra
 INCLUDES = -Iinclude -Ideps/lz4xx/include
 LDFLAGS = -Ldeps/lz4xx/build -Wl,-whole-archive -l:liblz4xx.a -Wl,-no-whole-archive
 
@@ -18,6 +18,7 @@ directories:
 
 clean:
 	rm -f $(OBJS)
+	rm -f $(DEPS)
 	rm -f $(BIN)
 
 obj/%.o: src/%.cpp
