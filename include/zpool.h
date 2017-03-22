@@ -42,6 +42,8 @@ public:
     if (!_readObjectImpl(bp, vdev_index, sizeof(TObj), obj))
       return false;
 
+    CORRECT_BYTEORDER(bp.endian, obj);
+
     // TODO: currently commented out, because it cannot be trusted
     // return obj->validate();
     return true;

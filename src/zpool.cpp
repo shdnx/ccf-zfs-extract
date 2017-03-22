@@ -15,10 +15,10 @@ static bool seekToLabel(std::FILE *fp, u32 label_index) {
   case 1:
     return std::fseek(fp, static_cast<long>(VDEV_LABEL_SIZE), SEEK_SET) == 0;
 
-  case 3:
+  case 2:
     return std::fseek(fp, -static_cast<long>(VDEV_LABEL_SIZE), SEEK_END) == 0;
 
-  case 4:
+  case 3:
     return std::fseek(fp, -static_cast<long>(VDEV_LABEL_SIZE * 2), SEEK_END) ==
            0;
 
@@ -63,9 +63,9 @@ bool ZPool::readUberblock(u32 label_index, u32 ub_index, OUT Uberblock *ub) {
 #define BE_IN64(xa) \
   (((uint64_t)BE_IN32(xa) << 32) | BE_IN32((uint8_t *)(xa) + 4))
 
-static bool readLZ4CompressedObject(FILE *fp, size_t logical_size,
-                                    size_t phys_size, size_t obj_size,
-                                    OUT void *obj) {
+static bool readLZ4CompressedData(FILE *fp, size_t logical_size,
+                                  size_t phys_size, OUT void *data,
+                                  OUT int *compressed_size_, OUT int *result) {
   ASSERT(phys_size % SECTOR_SIZE == 0, "Non-sector aligned physical size: %zu",
          phys_size);
 
@@ -79,29 +79,57 @@ static bool readLZ4CompressedObject(FILE *fp, size_t logical_size,
     return false;
   }
 
-  std::unique_ptr<char[]> obuffer{new char[logical_size]};
-
   u32 *     ibuffer_raw     = reinterpret_cast<u32 *>(ibuffer.get());
   const u32 compressed_size = BE_IN32(ibuffer_raw);
-  ASSERT(logical_size > compressed_size + sizeof(compressed_size),
-         "Invalid logical size %zu: lower than the compressed size %zu",
-         logical_size, compressed_size);
+
+  if (logical_size <= compressed_size + sizeof(compressed_size)) {
+    LOG("Cannot LZ4 decompress: lnvalid logical size %zu: lower than the "
+        "compressed size %u\n",
+        logical_size, compressed_size);
+    return false;
+  }
 
   const int nbytes = LZ4_decompress_safe(
-      reinterpret_cast<const char *>(&ibuffer_raw[1]), obuffer.get(),
+      reinterpret_cast<const char *>(&ibuffer_raw[1]), OUT data,
       static_cast<int>(compressed_size), static_cast<int>(logical_size));
 
-  LOG("LZ4_decompress_safe => %d\n", nbytes);
+  LOG("LZ4_decompress_safe => %d (compressed_size = %u, lsize = %zu, psize = "
+      "%zu, objsize = %zu)\n",
+      nbytes, compressed_size, logical_size, phys_size, obj_size);
 
-  std::memcpy(obj, obuffer.get(), obj_size);
+  OUT *compressed_size_ = compressed_size;
+  OUT *result           = nbytes;
+  return true;
+}
+
+static bool readLZ4CompressedObject(FILE *fp, size_t logical_size,
+                                    size_t phys_size, size_t obj_size,
+                                    OUT void *obj) {
+  std::unique_ptr<char[]> buffer{new char[logical_size]};
+  int                     compressed_size;
+  int                     result;
+  if (!readLZ4CompressedData(fp, logical_size, phys_size, OUT buffer.get(),
+                             OUT & compressed_size, OUT & result))
+    return false;
+
+  std::memcpy(obj, buffer.get(), obj_size);
   return true;
 }
 
 bool ZPool::_readObjectImpl(const Blkptr &bp, u32 vdev_index, size_t obj_size,
                             OUT void *obj) {
-  ASSERT(bp.endian == Endian::Little, "Cannot handle big endian blkptr!");
+  // ASSERT(bp.endian == Endian::Little, "Cannot handle big endian blkptr!");
 
-  const u64 addr = bp.vdev[vdev_index].getAddress();
+  const Dva &dva = bp.vdev[vdev_index];
+  if (!dva.validate()) {
+    LOG("Attempted to read invalid DVA!\n");
+    return false;
+  }
+
+  const u64 addr = dva.getAddress();
+
+  LOG("Resolving DVA: ");
+  dva.dump(stderr);
 
   LOG("Reading object of size %zu from offset: %016lx\n", obj_size, addr);
   if (std::fseek(m_fp, addr, SEEK_SET) != 0) {
@@ -109,11 +137,18 @@ bool ZPool::_readObjectImpl(const Blkptr &bp, u32 vdev_index, size_t obj_size,
     return false;
   }
 
+  ASSERT(!dva.gang_block, "Don't know how to resolve a gangblock DVA!");
+
   const size_t lsize = bp.getLogicalSize();
   const size_t psize = bp.getPhysicalSize();
 
-  const Compress effectiveComp =
-      (bp.comp == Compress::On ? Compress::Default : bp.comp);
+  Compress effectiveComp = bp.comp;
+  if (effectiveComp == Compress::On)
+    effectiveComp = Compress::Default;
+  else if (effectiveComp == Compress::Inherit) {
+    LOG("Warning: treating Compress::Inherit as Compress::Default!\n");
+    effectiveComp = Compress::Default;
+  }
 
   switch (effectiveComp) {
   case Compress::LZ4:

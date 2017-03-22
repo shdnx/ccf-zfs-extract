@@ -12,6 +12,8 @@ using u16 = std::uint16_t;
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
+using size_t = std::size_t;
+
 #define KB (1024uL)
 #define MB (KB * 1024uL)
 #define GB (MB * 1024uL)
@@ -54,3 +56,6 @@ void _unreachable_fail(const char *func, const char *file, int line,
 #define CONCAT3(A, B, C) _CONCAT3_IMPL(A, B, C)
 
 #define PADDING(NBYTES) u8 CONCAT2(_pad, __COUNTER__)[NBYTES]
+
+#define flag_isset(BITSET, FLAG) \
+  ((static_cast<u64>(BITSET) & static_cast<u64>(FLAG)) != 0)

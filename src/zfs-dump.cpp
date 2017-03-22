@@ -43,6 +43,7 @@ static void print_indent(FILE *fp) {
 
 #define HEADER(fp, ...)   \
   PRINT(fp, __VA_ARGS__); \
+  PRINT(fp, "\n");        \
   INDENTED(1)
 
 #define _ONCE_IMPL(VARNAME) for (bool VARNAME = true; VARNAME; VARNAME = false)
@@ -97,8 +98,8 @@ static inline DumpObjCtx<TObj> make_obj_ctx(FILE *fp, const TObj &obj) {
   for (auto __dumpctx = make_obj_ctx((FP), (OBJ)); __dumpctx.run; \
        __dumpctx.run  = false)
 
-#define OBJECT_HEADER(FP, OBJ, TITLE) \
-  HEADER((FP), TITLE)                 \
+#define OBJECT_HEADER(FP, OBJ, ...) \
+  HEADER((FP), __VA_ARGS__)         \
   DUMP_OBJECT((FP), (OBJ))
 
 #define DUMP_FIELD(FIELDNAME) DUMP(__dumpctx.fp, *__dumpctx.obj, FIELDNAME)
@@ -111,37 +112,49 @@ template <typename TObj> static void checkValid(FILE *fp, const TObj *obj) {
   }
 }
 
-void Dva::dump(FILE *fp) const {
-  HEADER(fp, "DVA <0x%x:0x%lx:0x%x>\n", vdev, offset, asize) {
+void Dva::dump(FILE *fp, DumpFlags flags) const {
+  if (!validate() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "DVA: invalid\n");
+    return;
+  }
+
+  HEADER(fp, "DVA <0x%x:0x%lx:0x%x>", vdev, offset, asize) {
     checkValid(fp, this);
   }
 }
 
-void Blkptr::dump(FILE *fp) const {
-  HEADER(fp, "BLKPTR <L:0x%lx, P:0x%lx>:\n", getLogicalSize(),
-         getPhysicalSize()) {
-    DUMP_OBJECT(fp, *this) {
-      DUMP_FIELD(type);
-      DUMP_FIELD(comp);
-      DUMP_FIELD(cksum);
-      DUMP_FIELD(fill);
-      DUMP_FIELD(birth_txg);
+void Blkptr::dump(FILE *fp, DumpFlags flags) const {
+  if (!validate() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "BLKPTR: invalid\n");
+    return;
+  }
 
-      for (size_t i = 0; i < 3; i++) {
-        INLINE_HEADER(fp, "vdev[%zu]: ", i) { vdev[i].dump(fp); }
-      }
+  OBJECT_HEADER(fp, *this, "BLKPTR <L:0x%lx, P:0x%lx>:", getLogicalSize(),
+                getPhysicalSize()) {
+    DUMP_FIELD(type);
+    DUMP_FIELD(comp);
+    DUMP_FIELD(endian);
+    DUMP_FIELD(cksum);
+    DUMP_FIELD(fill);
+    DUMP_FIELD(birth_txg);
+
+    for (size_t i = 0; i < 3; i++) {
+      INLINE_HEADER(fp, "vdev[%zu]: ", i) { vdev[i].dump(fp); }
     }
 
     checkValid(fp, this);
   }
 }
 
-void Uberblock::dump(FILE *fp) const {
-  HEADER(fp, "Uberblock 0x%lx:\n", txg) {
-    DUMP_OBJECT(fp, *this) {
-      DUMP_FIELD(timestamp);
-      DUMP_FIELD(spa_version);
-    }
+void Uberblock::dump(FILE *fp, DumpFlags flags) const {
+  if (!validate() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "Uberblock: invalid\n");
+    return;
+  }
+
+  OBJECT_HEADER(fp, *this, "Uberblock 0x%lx:", txg) {
+    DUMP_FIELD(timestamp);
+    DUMP_FIELD(spa_version);
 
     INLINE_HEADER(fp, "rootbp: ") { rootbp.dump(fp); }
 
@@ -149,14 +162,22 @@ void Uberblock::dump(FILE *fp) const {
   }
 }
 
-void DNode::dump(FILE *fp) const {
-  OBJECT_HEADER(fp, *this, "DNode:\n") {
+void DNode::dump(FILE *fp, DumpFlags flags) const {
+  if (!validate() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "DNode: invalid\n");
+    return;
+  }
+
+  OBJECT_HEADER(fp, *this, "DNode:") {
     DUMP_FIELD(phys_comp);
     DUMP_FIELD(checksum);
+    DUMP_FIELD(indblkshift);
+    DUMP_FIELD(data_blk_size_secs);
     DUMP_FIELD(nblkptr);
     DUMP_FIELD(nlevels);
     DUMP_FIELD(type);
     DUMP_FIELD(bonuslen);
+    DUMP_FIELD(bonustype);
     DUMP_FIELD(flags);
     DUMP_FIELD(max_block_id);
     DUMP_FIELD(secphys_used);
@@ -169,9 +190,14 @@ void DNode::dump(FILE *fp) const {
   }
 }
 
-void ObjSet::dump(FILE *fp) const {
-  HEADER(fp, "ObjSet:\n") {
-    DUMP_OBJECT(fp, *this) { DUMP_FIELD(type); }
+void ObjSet::dump(FILE *fp, DumpFlags flags) const {
+  if (!validate() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "ObjSet: invalid\n");
+    return;
+  }
+
+  OBJECT_HEADER(fp, *this, "ObjSet:") {
+    DUMP_FIELD(type);
 
     INLINE_HEADER(fp, "metadnode: ") { metadnode.dump(fp); }
 

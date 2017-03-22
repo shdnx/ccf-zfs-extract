@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <memory>
 
+#include "byteorder.h"
 #include "common.h"
 
 #define UB_MAGIC 0x00BAB10C
@@ -24,10 +25,12 @@
 // - contain a VALID_IF() expression with a pure (side-effect free) boolean
 // expression
 
+enum class DumpFlags { None, AllowInvalid = 1 };
+
 #define VALID_IF(EXPR)                                                   \
   static constexpr const char *const validation_expr = #EXPR;            \
   bool                               validate() const { return (EXPR); } \
-  void dump(std::FILE *of) const;
+  void dump(std::FILE *of, DumpFlags flags = DumpFlags::None) const;
 
 struct Dva {
   u32 asize : 24;
@@ -43,17 +46,16 @@ struct Dva {
     return static_cast<size_t>(asize) << SECTOR_SHIFT;
   }
 
-  VALID_IF(asize > 0 && offset > 0);
+  VALID_IF(asize != 0 && offset != 0);
 } __attribute__((packed));
 
 static_assert(sizeof(Dva) == 16, "Dva definition incorrect!");
 
-enum class BlkptrType : u8 {
+enum class DNodeType : u8 {
+  Invalid,
   DNode  = 0x0a,
   ObjSet = 0x0b,
 };
-
-enum class Endian : bool { Little = 1, Big = 0 };
 
 // See include/sys/zio.h for a full list of compressions that ZFS-on-Linux
 // supports. The ZFS on-disk documentation here is not valid.
@@ -61,7 +63,7 @@ enum class Compress : u8 {
   Inherit = 0,
   On,
   Off,
-  LZ4 = 15,
+  LZ4 = 0xf,
 
   Default = LZ4
 };
@@ -75,12 +77,12 @@ struct Blkptr {
   Compress comp : 7;
   bool     embedded : 1;
 
-  u8         cksum;
-  BlkptrType type;
-  u8         lvl : 5;
-  bool       encrypt : 1;
-  bool       dedup : 1;
-  Endian     endian : 1;
+  u8        cksum;
+  DNodeType type; // this type seems to be the same as DNode's type
+  u8        lvl : 5;
+  bool      encrypt : 1;
+  bool      dedup : 1;
+  Endian    endian : 1;
   // -- end props --
 
   PADDING(3 * sizeof(u64));
@@ -96,7 +98,7 @@ struct Blkptr {
     return (static_cast<size_t>(psize) + BLKPTR_SIZE_BIAS) << BLKPTR_SIZE_SHIFT;
   }
 
-  VALID_IF(true);
+  VALID_IF(type != DNodeType::Invalid);
 } __attribute__((packed));
 
 static_assert(sizeof(Blkptr) == 128, "Blkptr definition incorrect!");
@@ -112,8 +114,6 @@ struct Uberblock {
 
   VALID_IF(magic == UB_MAGIC);
 } __attribute__((packed));
-
-enum class DNodeType : u8 { Invalid };
 
 struct DNode {
   DNodeType type;
