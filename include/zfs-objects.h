@@ -27,9 +27,11 @@
 
 enum class DumpFlags { None, AllowInvalid = 1 };
 
-#define VALID_IF(EXPR)                                                   \
-  static constexpr const char *const validation_expr = #EXPR;            \
-  bool                               validate() const { return (EXPR); } \
+// unfortunately, we cannot use inheritance, because these data structures need
+// to be directly readable from the disk for simplicity
+#define VALID_IF(EXPR)                                                  \
+  static constexpr const char *const validation_expr = #EXPR;           \
+  bool                               isValid() const { return (EXPR); } \
   void dump(std::FILE *of, DumpFlags flags = DumpFlags::None) const;
 
 struct Dva {
@@ -51,8 +53,10 @@ struct Dva {
 
 static_assert(sizeof(Dva) == 16, "Dva definition incorrect!");
 
+// matches dmu_object_type in dmu.h in ZFS-on-Linux
 enum class DNodeType : u8 {
   Invalid,
+  ObjDirectory, // contains information about meta objects
   DNode  = 0x0a,
   ObjSet = 0x0b,
 };
@@ -147,7 +151,12 @@ struct ObjSet {
   DNode metadnode;
   PADDING(8 * sizeof(u64)); // TODO: zil_header
   u64 type;
-  PADDING(376);
+  u64 flags;
+  PADDING(432);
+  DNode userused_dnode;
+  DNode groupused_dnode;
 
   VALID_IF(true);
 } __attribute__((packed));
+
+static_assert(sizeof(ObjSet) == 2048, "ObjSet definition invalid!");

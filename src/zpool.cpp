@@ -43,134 +43,111 @@ bool ZPool::readUberblock(u32 label_index, u32 ub_index, OUT Uberblock *ub) {
     return false;
   }
 
-  if (!ub->validate()) {
-    // LOG("Uberblock L%u:%u failed validation check!\n", label_index,
-    // ub_index);
-    return false;
-  }
-
-  return true;
+  return ub->isValid();
 }
 
 // blatantly stolen from byteorder.h in linux-on-zfs source tree
-#define BE_IN8(xa) *((uint8_t *)(xa))
+#define BE_IN8(xa) *((u8 *)(xa))
+#define BE_IN16(xa) (((u16)BE_IN8(xa) << 8) | BE_IN8((u8 *)(xa) + 1))
+#define BE_IN32(xa) (((u32)BE_IN16(xa) << 16) | BE_IN16((u8 *)(xa) + 2))
+#define BE_IN64(xa) (((u64)BE_IN32(xa) << 32) | BE_IN32((u8 *)(xa) + 4))
 
-#define BE_IN16(xa) (((uint16_t)BE_IN8(xa) << 8) | BE_IN8((uint8_t *)(xa) + 1))
+static bool readLZ4CompressedData(FILE *fp, size_t lsize, size_t psize,
+                                  OUT void *data, OUT int *result) {
+  ASSERT(psize % SECTOR_SIZE == 0, "Non-sector aligned physical size: %zu",
+         psize);
 
-#define BE_IN32(xa) \
-  (((uint32_t)BE_IN16(xa) << 16) | BE_IN16((uint8_t *)(xa) + 2))
+  std::unique_ptr<char[]> ibuffer{new char[psize]};
 
-#define BE_IN64(xa) \
-  (((uint64_t)BE_IN32(xa) << 32) | BE_IN32((uint8_t *)(xa) + 4))
-
-static bool readLZ4CompressedData(FILE *fp, size_t logical_size,
-                                  size_t phys_size, OUT void *data,
-                                  OUT int *compressed_size_, OUT int *result) {
-  ASSERT(phys_size % SECTOR_SIZE == 0, "Non-sector aligned physical size: %zu",
-         phys_size);
-
-  std::unique_ptr<char[]> ibuffer{new char[phys_size]};
-
-  const size_t nread = std::fread(ibuffer.get(), sizeof(char), phys_size, fp);
-  if (nread != phys_size) {
+  const size_t nread = std::fread(ibuffer.get(), sizeof(char), psize, fp);
+  if (nread != psize) {
     LOG("Failed to read compressed object of psize = %lx, "
         "could only read: %zu\n",
-        phys_size, nread);
+        psize, nread);
     return false;
   }
 
   u32 *     ibuffer_raw     = reinterpret_cast<u32 *>(ibuffer.get());
   const u32 compressed_size = BE_IN32(ibuffer_raw);
 
-  if (logical_size <= compressed_size + sizeof(compressed_size)) {
+  if (lsize <= compressed_size + sizeof(compressed_size)) {
     LOG("Cannot LZ4 decompress: lnvalid logical size %zu: lower than the "
         "compressed size %u\n",
-        logical_size, compressed_size);
+        lsize, compressed_size);
     return false;
   }
 
-  const int nbytes = LZ4_decompress_safe(
-      reinterpret_cast<const char *>(&ibuffer_raw[1]), OUT data,
-      static_cast<int>(compressed_size), static_cast<int>(logical_size));
+  const int decompress_result = LZ4_decompress_safe(
+      reinterpret_cast<const char *>(&ibuffer_raw[1]),
+      OUT reinterpret_cast<char *>(data), static_cast<int>(compressed_size),
+      static_cast<int>(lsize));
 
   LOG("LZ4_decompress_safe => %d (compressed_size = %u, lsize = %zu, psize = "
-      "%zu, objsize = %zu)\n",
-      nbytes, compressed_size, logical_size, phys_size, obj_size);
+      "%zu)\n",
+      decompress_result, compressed_size, lsize, psize);
 
-  OUT *compressed_size_ = compressed_size;
-  OUT *result           = nbytes;
+  OUT *result = decompress_result;
   return true;
 }
 
-static bool readLZ4CompressedObject(FILE *fp, size_t logical_size,
-                                    size_t phys_size, size_t obj_size,
-                                    OUT void *obj) {
-  std::unique_ptr<char[]> buffer{new char[logical_size]};
-  int                     compressed_size;
-  int                     result;
-  if (!readLZ4CompressedData(fp, logical_size, phys_size, OUT buffer.get(),
-                             OUT & compressed_size, OUT & result))
-    return false;
+static Compress getEffectiveCompression(Compress comp) {
+  switch (comp) {
+  case Compress::On:
+    return Compress::Default;
 
-  std::memcpy(obj, buffer.get(), obj_size);
-  return true;
+  case Compress::Inherit:
+    LOG("Warning: treating Compress::Inherit as Compress::Default!\n");
+    return Compress::Default;
+
+  default:
+    return comp;
+  }
 }
 
-bool ZPool::_readObjectImpl(const Blkptr &bp, u32 vdev_index, size_t obj_size,
-                            OUT void *obj) {
-  // ASSERT(bp.endian == Endian::Little, "Cannot handle big endian blkptr!");
+bool ZPool::readRawData(const Blkptr &bp, u32 vdev_index, OUT void *data) {
+  ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
+  ASSERT(bp.endian == Endian::Little, "Cannot handle big endian blkptr!");
+
+  const size_t lsize = bp.getLogicalSize();
+  const size_t psize = bp.getPhysicalSize();
 
   const Dva &dva = bp.vdev[vdev_index];
-  if (!dva.validate()) {
-    LOG("Attempted to read invalid DVA!\n");
-    return false;
-  }
+  ASSERT(dva.isValid(), "Cannot resolve invalid DVA at index %u!", vdev_index);
+  ASSERT(!dva.gang_block, "Don't know how to resolve a gangblock DVA!");
 
-  const u64 addr = dva.getAddress();
+  const u64    addr  = dva.getAddress();
+  const size_t asize = dva.getAllocatedSize();
 
-  LOG("Resolving DVA: ");
+  LOG("Reading %zu logical (%zu physical) bytes from DVA: ", lsize, psize);
   dva.dump(stderr);
 
-  LOG("Reading object of size %zu from offset: %016lx\n", obj_size, addr);
   if (std::fseek(m_fp, addr, SEEK_SET) != 0) {
     LOG("Seek failed!\n");
     return false;
   }
 
-  ASSERT(!dva.gang_block, "Don't know how to resolve a gangblock DVA!");
-
-  const size_t lsize = bp.getLogicalSize();
-  const size_t psize = bp.getPhysicalSize();
-
-  Compress effectiveComp = bp.comp;
-  if (effectiveComp == Compress::On)
-    effectiveComp = Compress::Default;
-  else if (effectiveComp == Compress::Inherit) {
-    LOG("Warning: treating Compress::Inherit as Compress::Default!\n");
-    effectiveComp = Compress::Default;
-  }
-
-  switch (effectiveComp) {
+  const Compress comp = getEffectiveCompression(bp.comp);
+  switch (comp) {
   case Compress::LZ4:
-    return readLZ4CompressedObject(m_fp, lsize, psize, obj_size, OUT obj);
+    int decompress_result;
+    return readLZ4CompressedData(m_fp, lsize, psize, OUT data,
+                                 OUT & decompress_result);
 
   case Compress::Off:
-    ASSERT(lsize == psize, "Logical (%zu) and physical (%zu) size don't match "
-                           "even though compression is off?",
-           lsize, psize);
-    ASSERT(psize == bp.vdev[vdev_index].asize, "Phyiscal (%zu) and allocated "
-                                               "(%zu) size don't match even "
-                                               "though compression is off?",
-           psize, bp.vdev[vdev_index].asize);
+    ASSERT(lsize == psize && lsize == asize, "Mismatch between logical (%zu), "
+                                             "physical (%zu) and allocated "
+                                             "(%zu) sizes "
+                                             "even though compression is off!",
+           lsize, psize, asize);
 
-    if (std::fread(obj, obj_size, 1, m_fp) != 1) {
-      LOG("Failed to read uncompressed object!\n");
+    if (std::fread(data, sizeof(char), lsize, m_fp) != lsize) {
+      LOG("Failed to read uncompressed data!\n");
       return false;
     }
 
     return true;
 
   default:
-    UNREACHABLE("Unhandled compression: %u!", static_cast<u32>(bp.comp));
+    UNREACHABLE("Unhandled compression: %u!", static_cast<u32>(comp));
   }
 }

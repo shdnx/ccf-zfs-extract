@@ -6,7 +6,8 @@
 #include "zfs-objects.h"
 #include "zpool.h"
 
-static void handle_dnode(ZPool &zpool, const DNode &dnode, unsigned level = 0) {
+/*static void handle_dnode(ZPool &zpool, const DNode &dnode, unsigned level = 0)
+{
   ASSERT(level < 3, "Too many levels!!");
 
   if (!dnode.validate()) {
@@ -25,13 +26,13 @@ static void handle_dnode(ZPool &zpool, const DNode &dnode, unsigned level = 0) {
     DNode child_dnode;
     for (size_t i = 0; i < dnode.nblkptr; i++) {
       for (size_t v = 0; v < 1; v++) {
-        if (zpool.readObject(dnode.bps[i], /*vdev=*/v, OUT & child_dnode)) {
+        if (zpool.readObject(dnode.bps[i], v, OUT & child_dnode)) {
           handle_dnode(zpool, child_dnode, level + 1);
         }
       }
     }
   }
-}
+}*/
 
 static void handle_ub(ZPool &zpool, const Uberblock &ub) {
   ub.dump(stderr);
@@ -51,21 +52,33 @@ static void handle_ub(ZPool &zpool, const Uberblock &ub) {
 
     objset.dump(stderr);
 
-    DNode dnode;
+    std::unique_ptr<DNode[]> dnodes;
     for (size_t blkptr_index = 0; blkptr_index < objset.metadnode.nblkptr;
          blkptr_index++) {
+      const Blkptr &bp = objset.metadnode.bps[blkptr_index];
+      if (!bp.isValid())
+        continue;
+
       for (size_t vdev_index = 0; vdev_index < 1; vdev_index++) {
+        if (!bp.vdev[vdev_index].isValid())
+          continue;
+
         LOG(" -- following root objset.metadnode.bps[%zu] with vdev = %zu\n",
             blkptr_index, vdev_index);
 
-        const bool read = zpool.readObject(objset.metadnode.bps[blkptr_index],
-                                           /*vdev=*/vdev_index, OUT & dnode);
-        if (!read) {
-          LOG("Warning: could not follow blkptr in root objset's metadnode!\n");
-          continue;
-        }
+        const size_t nread =
+            zpool.readObjectArray(bp, vdev_index, OUT & dnodes);
 
-        handle_dnode(zpool, dnode);
+        for (size_t i = 0; i < nread; i++) {
+          const DNode &dnode = dnodes[i];
+          if (!dnode.isValid())
+            continue;
+
+          if (dnode.type == DNodeType::ObjDirectory) {
+            LOG("Found the object directory:\n");
+            dnode.dump(stderr);
+          }
+        }
       }
     }
   }
@@ -105,7 +118,3 @@ int main(int argc, const char **argv) {
 
   return 0;
 }
-
-/*#define DBP_SPAN(dnp, level)          \
-  (((uint64_t)dnp->dn_datablkszsec) << (SPA_MINBLOCKSHIFT + \
-  (level) * (dnp->dn_indblkshift - SPA_BLKPTRSHIFT)))*/

@@ -5,3 +5,4 @@ AlignConsecutiveDeclarations: true
 AlignEscapedNewlinesLeft: true
 BraceWrapping:
   AfterEnum: true
+AlwaysBreakTemplateDeclarations: true

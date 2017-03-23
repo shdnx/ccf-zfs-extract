@@ -81,7 +81,8 @@ static constexpr const char *getFieldFormat(size_t fieldSize) {
     PRINT((FP), getFieldFormat(sizeof(__val)), #FIELD, __val);    \
   } while (0)
 
-template <typename TObj> struct DumpObjCtx {
+template <typename TObj>
+struct DumpObjCtx {
   FILE *      fp;
   const TObj *obj;
   bool        run = true;
@@ -106,25 +107,27 @@ static inline DumpObjCtx<TObj> make_obj_ctx(FILE *fp, const TObj &obj) {
 
 // ----- end DSL magic ------
 
-template <typename TObj> static void checkValid(FILE *fp, const TObj *obj) {
-  if (!obj->validate()) {
+template <typename TObj>
+static void checkValid(FILE *fp, const TObj *obj) {
+  if (!obj->isValid()) {
     PRINT(fp, "!! WARNING: failed validation: %s\n", TObj::validation_expr);
   }
 }
 
 void Dva::dump(FILE *fp, DumpFlags flags) const {
-  if (!validate() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "DVA: invalid\n");
     return;
   }
 
-  HEADER(fp, "DVA <0x%x:0x%lx:0x%x>", vdev, offset, asize) {
+  HEADER(fp, "DVA <0x%x:0x%lx:0x%x> = 0x%016lx", vdev, offset, asize,
+         getAddress()) {
     checkValid(fp, this);
   }
 }
 
 void Blkptr::dump(FILE *fp, DumpFlags flags) const {
-  if (!validate() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "BLKPTR: invalid\n");
     return;
   }
@@ -147,7 +150,7 @@ void Blkptr::dump(FILE *fp, DumpFlags flags) const {
 }
 
 void Uberblock::dump(FILE *fp, DumpFlags flags) const {
-  if (!validate() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "Uberblock: invalid\n");
     return;
   }
@@ -163,7 +166,7 @@ void Uberblock::dump(FILE *fp, DumpFlags flags) const {
 }
 
 void DNode::dump(FILE *fp, DumpFlags flags) const {
-  if (!validate() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "DNode: invalid\n");
     return;
   }
@@ -191,7 +194,7 @@ void DNode::dump(FILE *fp, DumpFlags flags) const {
 }
 
 void ObjSet::dump(FILE *fp, DumpFlags flags) const {
-  if (!validate() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "ObjSet: invalid\n");
     return;
   }
