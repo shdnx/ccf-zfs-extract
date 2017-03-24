@@ -34,6 +34,32 @@
   }
 }*/
 
+static bool getRootDataset(ZPool &zpool, const DNode &objDir,
+                           OUT u64 *root_index) {
+  ASSERT0(objDir.nlevels == 0);
+
+  for (size_t bp_index = 0; bp_index < objDir.nblkptr; bp_index++) {
+    const Blkptr &bp = objDir.bps[bp_index];
+    MZapBlock     zap{bp.getLogicalSize()};
+
+    if (!zpool.readVLObject(bp, 0, OUT & zap.header))
+      continue;
+
+    ASSERT(zap.block_type == ZapBlockType::Micro,
+           "Cannot handle non-micro ZAP!");
+
+    zap.dump(stderr);
+
+    const MZapEntry *entry = zap.findEntry("root_dataset");
+    if (entry) {
+      OUT *root_index = entry->value;
+      return true;
+    }
+  }
+
+  return false;
+}
+
 static void handle_ub(ZPool &zpool, const Uberblock &ub) {
   ub.dump(stderr);
   std::fprintf(stderr, "\n");
@@ -77,6 +103,13 @@ static void handle_ub(ZPool &zpool, const Uberblock &ub) {
           if (dnode.type == DNodeType::ObjDirectory) {
             LOG("Found the object directory:\n");
             dnode.dump(stderr);
+
+            u64 rootDataset;
+            if (getRootDataset(zpool, dnode, OUT & rootDataset)) {
+              LOG("root_dataset = %lx\n", rootDataset);
+            } else {
+              LOG("Could not find the root_dataset!!! :(\n");
+            }
           }
         }
       }

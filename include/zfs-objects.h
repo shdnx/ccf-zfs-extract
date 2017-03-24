@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <memory>
+#include <string>
 
 #include "byteorder.h"
 #include "common.h"
@@ -160,3 +161,120 @@ struct ObjSet {
 } __attribute__((packed));
 
 static_assert(sizeof(ObjSet) == 2048, "ObjSet definition invalid!");
+
+// ZAP = ZFS Attribute Processor
+#define ZAP_MAGIC 0x2F52AB2ABull
+
+// micro-zap, i.e. a ZAP that takes only one block, there's no indirection
+// involved
+struct MZapEntry {
+  u64 value;
+  u32 cd;
+  PADDING(2);
+  char name[50];
+
+  VALID_IF(true);
+} __attribute__((packed));
+
+static_assert(sizeof(MZapEntry) == 64, "MZapEntry invalid!");
+
+enum ZapBlockType : u64 {
+  Leaf   = (1uLL << 63) + 0,
+  Header = (1uLL << 63) + 1,
+  Micro  = (1uLL << 63) + 3,
+};
+
+struct MZapHeader {
+  ZapBlockType block_type;
+  u64          salt;
+  u64          normflags;
+  PADDING(5 * sizeof(u64));
+  MZapEntry entries[1]; // VLA
+
+  static size_t getNumChunks(size_t block_size) {
+    return 1 + (block_size - sizeof(MZapHeader)) / sizeof(MZapEntry);
+  }
+
+  // if it's not a Micro ZAP, then it cannot be represented as an MZap
+  VALID_IF(block_type == ZapBlockType::Micro);
+} __attribute__((packed));
+
+struct MZapEntryIterator {
+  using reference = const MZapEntry &;
+  using pointer   = const MZapEntry *;
+
+  explicit MZapEntryIterator(pointer entry) : m_entry{entry} {}
+
+  reference operator*() const { return *m_entry; }
+  pointer operator->() const { return m_entry; }
+
+  MZapEntryIterator &operator++() {
+    m_entry++;
+    return *this;
+  }
+
+  MZapEntryIterator operator++(int) {
+    MZapEntryIterator old{*this};
+    m_entry++;
+    return old;
+  }
+
+  bool operator==(const MZapEntryIterator &rhs) const {
+    return m_entry == rhs.m_entry;
+  }
+
+  bool operator!=(const MZapEntryIterator &rhs) const {
+    return !operator==(rhs);
+  }
+
+private:
+  pointer m_entry;
+};
+
+struct MZapEntryRange {
+  using iterator = MZapEntryIterator;
+
+  explicit MZapEntryRange(const MZapEntry *begin, const MZapEntry *end)
+      : m_begin{begin}, m_end{end} {}
+
+  size_t size() const { return m_end - m_begin; }
+
+  const MZapEntry &operator[](size_t i) const { return m_begin[i]; }
+
+  iterator begin() const { return iterator{m_begin}; }
+  iterator end() const { return iterator{m_end}; }
+
+private:
+  const MZapEntry *m_begin;
+  const MZapEntry *m_end;
+};
+
+// NOTE: cannot be read directly from disk
+struct MZapBlock {
+  MZapEntryRange entries;
+  MZapHeader     header; // variable length
+
+  explicit MZapBlock(size_t block_size)
+      : entries{&header.entries[0],
+                &header.entries[MZapHeader::getNumChunks(block_size)]} {}
+
+  explicit MZapBlock(MZapHeader header_, size_t block_size)
+      : entries{&header.entries[0],
+                &header.entries[MZapHeader::getNumChunks(block_size)]},
+        header{header_} {}
+
+  const MZapHeader *operator->() const { return &header; }
+
+  size_t getNumEntries() const { return entries.size(); }
+
+  const MZapEntry *findEntry(const std::string &name) const {
+    for (const MZapEntry &entry : entries) {
+      if (name == entry.name)
+        return &entry;
+    }
+
+    return nullptr;
+  }
+
+  VALID_IF(header.isValid());
+};

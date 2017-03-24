@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <type_traits>
 
 #include "zfs-objects.h"
 
@@ -54,31 +55,52 @@ static void print_indent(FILE *fp) {
   g_suppress_indent = true;    \
   ONCE()
 
-static constexpr const char *getFieldFormat(size_t fieldSize) {
-#define PREFIX "%-15s = "
-#define SUFFIX "\n"
+template <typename T>
+struct FieldFormat;
 
-  switch (fieldSize) {
-  case 8:
-    return PREFIX FMT64 SUFFIX;
-  case 4:
-    return PREFIX FMT32 SUFFIX;
-  case 2:
-    return PREFIX FMT16 SUFFIX;
-  case 1:
-    return PREFIX FMT8 SUFFIX;
-  default:
-    return nullptr;
+#define FMT_PREFIX "%-15s = "
+#define FMT_SUFFIX "\n"
+
+#define FIELD_FORMAT(TYPE, VALUE_FMT)                                     \
+  template <>                                                             \
+  struct FieldFormat<TYPE> {                                              \
+    static constexpr const char *value = FMT_PREFIX VALUE_FMT FMT_SUFFIX; \
   }
 
-#undef SUFFIX
-#undef PREFIX
+FIELD_FORMAT(u64, FMT64);
+FIELD_FORMAT(u32, FMT32);
+FIELD_FORMAT(u16, FMT16);
+FIELD_FORMAT(u8, FMT8);
+FIELD_FORMAT(bool, "%d");
+FIELD_FORMAT(char *, "%s");
+
+#undef FMT_SUFFIX
+#undef FMT_PREFIX
+
+template <typename T, typename V = void>
+struct UnwrappedEnum;
+
+template <typename T>
+struct UnwrappedEnum<T,
+                     std::enable_if_t<std::is_enum<T>::value, std::true_type>> {
+  using type = std::underlying_type_t<T>;
+};
+
+template <typename T>
+struct UnwrappedEnum<T, std::true_type> {
+  using type = T;
+};
+
+template <typename T>
+constexpr const char *getFieldFormat(T val) {
+  using D = std::decay_t<T>;
+  return FieldFormat<typename UnwrappedEnum<D>::type>::value;
 }
 
 #define DUMP(FP, OBJ, FIELD)                                      \
   do {                                                            \
     const auto __val = (OBJ).FIELD; /* to get around bitfields */ \
-    PRINT((FP), getFieldFormat(sizeof(__val)), #FIELD, __val);    \
+    PRINT((FP), getFieldFormat(__val), #FIELD, __val);            \
   } while (0)
 
 template <typename TObj>
@@ -205,5 +227,44 @@ void ObjSet::dump(FILE *fp, DumpFlags flags) const {
     INLINE_HEADER(fp, "metadnode: ") { metadnode.dump(fp); }
 
     checkValid(fp, this);
+  }
+}
+
+void MZapEntry::dump(FILE *fp, DumpFlags flags) const {
+  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "MZapEntry: invalid\n");
+    return;
+  }
+
+  OBJECT_HEADER(fp, *this, "MZapEntry <%s = 0x%lx>", name, value) {}
+}
+
+void MZapHeader::dump(FILE *fp, DumpFlags flags) const {
+  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "MZapHeader: invalid\n");
+    return;
+  }
+
+  OBJECT_HEADER(fp, *this, "MZapHeader:") {
+    DUMP_FIELD(salt);
+    DUMP_FIELD(normflags);
+  }
+}
+
+void MZapBlock::dump(FILE *fp, DumpFlags flags) const {
+  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "MZapBlock: invalid\n");
+    return;
+  }
+
+  HEADER(fp, "MZapBlock:") {
+    INLINE_HEADER(fp, "header: ") { header.dump(fp, flags); }
+
+    const size_t nentries = entries.size();
+    HEADER(fp, "entries[%zu]: ", nentries) {
+      for (const i = 0; i < nentries; i++) {
+        INLINE_HEADER(fp, "[%zu]: ", i) { entries[i].dump(fp, flags); }
+      }
+    }
   }
 }

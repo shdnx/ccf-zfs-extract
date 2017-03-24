@@ -65,6 +65,13 @@ public:
     return readRawData(bp, vdev_index, OUT obj);
   }
 
+  // variable length objects
+  template <typename TObj>
+  bool readVLObject(const Blkptr &bp, u32 vdev_index, OUT TObj *obj) {
+    ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
+    return readRawData(bp, vdev_index, OUT obj);
+  }
+
   template <typename TObj>
   size_t readObjectArray(const Blkptr &bp, u32 vdev_index, OUT TObj *objs) {
     ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
