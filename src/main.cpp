@@ -36,22 +36,19 @@
 
 static bool getRootDataset(ZPool &zpool, const DNode &objDir,
                            OUT u64 *root_index) {
-  ASSERT0(objDir.nlevels == 0);
-
   for (size_t bp_index = 0; bp_index < objDir.nblkptr; bp_index++) {
     const Blkptr &bp = objDir.bps[bp_index];
     MZapBlock     zap{bp.getLogicalSize()};
 
-    if (!zpool.readVLObject(bp, 0, OUT & zap.header))
+    if (!zpool.readVLObject(bp, 0, OUT zap.data()))
       continue;
 
-    ASSERT(zap.block_type == ZapBlockType::Micro,
+    ASSERT(zap->block_type == ZapBlockType::Micro,
            "Cannot handle non-micro ZAP!");
 
     zap.dump(stderr);
 
-    const MZapEntry *entry = zap.findEntry("root_dataset");
-    if (entry) {
+    if (const MZapEntry *entry = zap.findEntry("root_dataset")) {
       OUT *root_index = entry->value;
       return true;
     }
@@ -99,6 +96,8 @@ static void handle_ub(ZPool &zpool, const Uberblock &ub) {
           const DNode &dnode = dnodes[i];
           if (!dnode.isValid())
             continue;
+
+          LOG("DNode of type %u\n", dnode.type);
 
           if (dnode.type == DNodeType::ObjDirectory) {
             LOG("Found the object directory:\n");

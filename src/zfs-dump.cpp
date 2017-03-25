@@ -74,33 +74,32 @@ FIELD_FORMAT(u8, FMT8);
 FIELD_FORMAT(bool, "%d");
 FIELD_FORMAT(char *, "%s");
 
+template <typename T>
+static inline void printFieldImpl(FILE *fp, const char *fieldName, T fieldValue,
+                                  std::true_type) {
+  PRINT(fp, FMT_PREFIX "%lu (0x%lx)" FMT_SUFFIX, fieldName,
+        static_cast<u64>(fieldValue), static_cast<u64>(fieldValue));
+}
+
+template <typename T>
+static inline void printFieldImpl(FILE *fp, const char *fieldName, T fieldValue,
+                                  std::false_type) {
+  PRINT(fp, FieldFormat<std::decay_t<T>>::value, fieldName, fieldValue);
+}
+
+template <typename T>
+static inline void printField(FILE *fp, const char *fieldName, T fieldValue) {
+  printFieldImpl(fp, fieldName, fieldValue,
+                 std::integral_constant<bool, std::is_enum<T>::value>{});
+}
+
 #undef FMT_SUFFIX
 #undef FMT_PREFIX
-
-template <typename T, typename V = void>
-struct UnwrappedEnum;
-
-template <typename T>
-struct UnwrappedEnum<T,
-                     std::enable_if_t<std::is_enum<T>::value, std::true_type>> {
-  using type = std::underlying_type_t<T>;
-};
-
-template <typename T>
-struct UnwrappedEnum<T, std::true_type> {
-  using type = T;
-};
-
-template <typename T>
-constexpr const char *getFieldFormat(T val) {
-  using D = std::decay_t<T>;
-  return FieldFormat<typename UnwrappedEnum<D>::type>::value;
-}
 
 #define DUMP(FP, OBJ, FIELD)                                      \
   do {                                                            \
     const auto __val = (OBJ).FIELD; /* to get around bitfields */ \
-    PRINT((FP), getFieldFormat(__val), #FIELD, __val);            \
+    printField((FP), #FIELD, __val);                              \
   } while (0)
 
 template <typename TObj>
@@ -258,12 +257,19 @@ void MZapBlock::dump(FILE *fp, DumpFlags flags) const {
   }
 
   HEADER(fp, "MZapBlock:") {
-    INLINE_HEADER(fp, "header: ") { header.dump(fp, flags); }
+    INLINE_HEADER(fp, "header: ") {
+      const MZapHeader *hdr = header();
+      if (hdr) {
+        hdr->dump(fp, flags);
+      } else {
+        PRINT(fp, "(nullptr)\n");
+      }
+    }
 
-    const size_t nentries = entries.size();
+    const size_t nentries = numEntries();
     HEADER(fp, "entries[%zu]: ", nentries) {
-      for (const i = 0; i < nentries; i++) {
-        INLINE_HEADER(fp, "[%zu]: ", i) { entries[i].dump(fp, flags); }
+      for (size_t i = 0; i < nentries; i++) {
+        INLINE_HEADER(fp, "[%zu]: ", i) { entries()[i].dump(fp, flags); }
       }
     }
   }

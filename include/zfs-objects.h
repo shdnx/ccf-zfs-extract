@@ -6,6 +6,7 @@
 
 #include "byteorder.h"
 #include "common.h"
+#include "ptr_range.h"
 
 #define UB_MAGIC 0x00BAB10C
 
@@ -30,10 +31,9 @@ enum class DumpFlags { None, AllowInvalid = 1 };
 
 // unfortunately, we cannot use inheritance, because these data structures need
 // to be directly readable from the disk for simplicity
-#define VALID_IF(EXPR)                                                  \
-  static constexpr const char *const validation_expr = #EXPR;           \
-  bool                               isValid() const { return (EXPR); } \
-  void dump(std::FILE *of, DumpFlags flags = DumpFlags::None) const;
+#define VALID_IF(EXPR)                                        \
+  static constexpr const char *const validation_expr = #EXPR; \
+  bool                               isValid() const { return (EXPR); }
 
 struct Dva {
   u32 asize : 24;
@@ -50,6 +50,7 @@ struct Dva {
   }
 
   VALID_IF(asize != 0 && offset != 0);
+  void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 } __attribute__((packed));
 
 static_assert(sizeof(Dva) == 16, "Dva definition incorrect!");
@@ -57,9 +58,13 @@ static_assert(sizeof(Dva) == 16, "Dva definition incorrect!");
 // matches dmu_object_type in dmu.h in ZFS-on-Linux
 enum class DNodeType : u8 {
   Invalid,
-  ObjDirectory, // contains information about meta objects
-  DNode  = 0x0a,
-  ObjSet = 0x0b,
+  ObjDirectory = 1, // contains information about meta objects
+  DNode        = 10,
+  ObjSet       = 11,
+  DataSet      = 16,
+  FileContents = 19,
+  DirContents  = 20,
+  MasterNode   = 21,
 };
 
 // See include/sys/zio.h for a full list of compressions that ZFS-on-Linux
@@ -104,6 +109,7 @@ struct Blkptr {
   }
 
   VALID_IF(type != DNodeType::Invalid);
+  void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 } __attribute__((packed));
 
 static_assert(sizeof(Blkptr) == 128, "Blkptr definition incorrect!");
@@ -118,6 +124,7 @@ struct Uberblock {
   Blkptr rootbp;
 
   VALID_IF(magic == UB_MAGIC);
+  void dump(FILE *fp, DumpFlags flags = DumpFlags::None) const;
 } __attribute__((packed));
 
 struct DNode {
@@ -144,6 +151,7 @@ struct DNode {
   PADDING(64);
 
   VALID_IF(type != DNodeType::Invalid && nblkptr != 0 && nblkptr <= 3);
+  void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 } __attribute__((packed));
 
 static_assert(sizeof(DNode) == 512, "DNode!");
@@ -158,6 +166,7 @@ struct ObjSet {
   DNode groupused_dnode;
 
   VALID_IF(true);
+  void dump(FILE *fp, DumpFlags flags = DumpFlags::None) const;
 } __attribute__((packed));
 
 static_assert(sizeof(ObjSet) == 2048, "ObjSet definition invalid!");
@@ -173,7 +182,8 @@ struct MZapEntry {
   PADDING(2);
   char name[50];
 
-  VALID_IF(true);
+  VALID_IF(name[0] != 0);
+  void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 } __attribute__((packed));
 
 static_assert(sizeof(MZapEntry) == 64, "MZapEntry invalid!");
@@ -189,86 +199,79 @@ struct MZapHeader {
   u64          salt;
   u64          normflags;
   PADDING(5 * sizeof(u64));
-  MZapEntry entries[1]; // VLA
+  MZapEntry entries[]; // VLA
 
   static size_t getNumChunks(size_t block_size) {
-    return 1 + (block_size - sizeof(MZapHeader)) / sizeof(MZapEntry);
+    return (block_size - sizeof(MZapHeader)) / sizeof(MZapEntry);
   }
 
   // if it's not a Micro ZAP, then it cannot be represented as an MZap
   VALID_IF(block_type == ZapBlockType::Micro);
+  void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 } __attribute__((packed));
 
-struct MZapEntryIterator {
-  using reference = const MZapEntry &;
-  using pointer   = const MZapEntry *;
+template <typename THeader, typename TEntry>
+struct ZFSBlock {
+  using entry_range = ConstPtrRange<TEntry>;
 
-  explicit MZapEntryIterator(pointer entry) : m_entry{entry} {}
+  explicit ZFSBlock(size_t size)
+      : m_size{size}, m_data{new char[size]},
+        m_entries{
+            reinterpret_cast<const TEntry *>(m_data.get() + sizeof(THeader)),
+            reinterpret_cast<const TEntry *>(m_data.get() + size)} {
+    ASSERT(size >= sizeof(THeader),
+           "Block header size (%zu) is less than total block size (%zu)!",
+           sizeof(THeader), size);
+    ASSERT((size - sizeof(THeader)) % sizeof(TEntry) == 0,
+           "Misaligned header or entries: block size = %zu, header size = %zu, "
+           "entry size = %zu",
+           size, sizeof(THeader), sizeof(TEntry));
+  }
 
-  reference operator*() const { return *m_entry; }
-  pointer operator->() const { return m_entry; }
+  ZFSBlock(const ZFSBlock &) = delete;
 
-  MZapEntryIterator &operator++() {
-    m_entry++;
+  ZFSBlock(ZFSBlock &&rhs)
+      : m_size{rhs.m_size}, m_data{std::move(rhs.m_data)},
+        m_entries{std::move(rhs.m_entries)} {}
+
+  ZFSBlock &operator=(const ZFSBlock &rhs) = delete;
+
+  ZFSBlock &operator=(ZFSBlock &&rhs) {
+    m_size    = rhs.m_size;
+    m_data    = std::move(rhs.m_data);
+    m_entries = std::move(rhs.m_entries);
     return *this;
   }
 
-  MZapEntryIterator operator++(int) {
-    MZapEntryIterator old{*this};
-    m_entry++;
-    return old;
+  void *      data() { return m_data.get(); }
+  const void *data() const { return m_data.get(); }
+
+  size_t size() const { return m_size; }
+
+  THeader *header() { return reinterpret_cast<THeader *>(data()); }
+
+  const THeader *header() const {
+    return reinterpret_cast<const THeader *>(data());
   }
 
-  bool operator==(const MZapEntryIterator &rhs) const {
-    return m_entry == rhs.m_entry;
-  }
+  const THeader *operator->() const { return header(); }
 
-  bool operator!=(const MZapEntryIterator &rhs) const {
-    return !operator==(rhs);
-  }
+  const entry_range &entries() const { return m_entries; }
+  size_t             numEntries() const { return entries().size(); }
+
+  VALID_IF(header() && header()->isValid());
 
 private:
-  pointer m_entry;
+  size_t                  m_size;
+  std::unique_ptr<char[]> m_data;
+  entry_range             m_entries;
 };
 
-struct MZapEntryRange {
-  using iterator = MZapEntryIterator;
-
-  explicit MZapEntryRange(const MZapEntry *begin, const MZapEntry *end)
-      : m_begin{begin}, m_end{end} {}
-
-  size_t size() const { return m_end - m_begin; }
-
-  const MZapEntry &operator[](size_t i) const { return m_begin[i]; }
-
-  iterator begin() const { return iterator{m_begin}; }
-  iterator end() const { return iterator{m_end}; }
-
-private:
-  const MZapEntry *m_begin;
-  const MZapEntry *m_end;
-};
-
-// NOTE: cannot be read directly from disk
-struct MZapBlock {
-  MZapEntryRange entries;
-  MZapHeader     header; // variable length
-
-  explicit MZapBlock(size_t block_size)
-      : entries{&header.entries[0],
-                &header.entries[MZapHeader::getNumChunks(block_size)]} {}
-
-  explicit MZapBlock(MZapHeader header_, size_t block_size)
-      : entries{&header.entries[0],
-                &header.entries[MZapHeader::getNumChunks(block_size)]},
-        header{header_} {}
-
-  const MZapHeader *operator->() const { return &header; }
-
-  size_t getNumEntries() const { return entries.size(); }
+struct MZapBlock : ZFSBlock<MZapHeader, MZapEntry> {
+  explicit MZapBlock(size_t block_size) : ZFSBlock{block_size} {}
 
   const MZapEntry *findEntry(const std::string &name) const {
-    for (const MZapEntry &entry : entries) {
+    for (const MZapEntry &entry : entries()) {
       if (name == entry.name)
         return &entry;
     }
@@ -276,5 +279,33 @@ struct MZapBlock {
     return nullptr;
   }
 
-  VALID_IF(header.isValid());
+  void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 };
+
+// this lives in the bonus area of DNode objects
+struct DSLDataSet {
+  u64    dir_obj;
+  u64    prev_snap_obj;
+  u64    prev_snap_txg;
+  u64    next_snap_obj;
+  u64    snapnames_zapobj;
+  u64    nchildren;
+  u64    creation_time;
+  u64    creation_txg;
+  u64    deadlist_obj;
+  u64    referenced_bytes;
+  u64    compressed_bytes;
+  u64    uncompressed_bytes;
+  u64    unique_bytes;
+  u64    fsid_guid;
+  u64    guid;
+  u64    flags;
+  Blkptr bp;
+  u64    next_clones_obj;
+  u64    props_obj;
+  u64    userrefs_obj;
+  PADDING(5 * sizeof(u64));
+
+  VALID_IF(true);
+  void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
+} __attribute__((packed));
