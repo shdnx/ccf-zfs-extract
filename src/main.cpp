@@ -57,6 +57,162 @@ static bool getRootDataset(ZPool &zpool, const DNode &objDir,
   return false;
 }
 
+static bool getRootDataset(ZPool &zpool, const DNode *mos, size_t mosLength,
+                           OUT DNode const **rootDataset) {
+  for (size_t i = 0; i < mosLength; i++) {
+    const DNode &dnode = mos[i];
+    if (!dnode.isValid())
+      continue;
+
+    if (dnode.type == DNodeType::ObjDirectory) {
+      LOG("Found the object directory:\n");
+      dnode.dump(stderr);
+
+      u64 rootDatasetIndex;
+      if (getRootDataset(zpool, dnode, OUT & rootDatasetIndex)) {
+        OUT *rootDataset = &mos[rootDatasetIndex];
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+static const DNode *getDSLNodes(ZPool &zpool, const ObjSet &dslObjSet,
+                                OUT std::unique_ptr<DNode[]> *ll_nodes,
+                                OUT size_t *nll_nodes) {
+  // the master node always has the object id = 1, so we'll just take the first
+  // blkptr on all levels
+
+  Blkptr                    bp = dslObjSet.metadnode.bps[0];
+  std::unique_ptr<Blkptr[]> bp_array;
+  size_t                    bp_array_len;
+
+  for (size_t lvl = dslObjSet.metadnode.nlevels; lvl > 1; lvl--) {
+    // we read all blkptrs, so that it's easy to generalize this function later
+    bp_array_len = zpool.readObjectArray(bp, /*dva_index=*/0, OUT & bp_array);
+    ASSERT(bp_array_len != 0, "Failed to read blkptr object array!");
+
+    bp = bp_array[0]; // copy
+  }
+
+  std::unique_ptr<DNode[]> dnodes;
+  size_t ndnodes = zpool.readObjectArray(bp, /*dva_index=*/0, OUT & dnodes);
+  ASSERT0(ndnodes != 0);
+
+  const DNode *masterNode = &dnodes[1];
+
+  OUT *nll_nodes = ndnodes;
+  OUT *ll_nodes  = std::move(dnodes);
+  return masterNode;
+}
+
+/*static bool dumpDirNode(FILE *fp, ZPool &zpool, const DNode &dirNode) {
+  const Blkptr &bp = dirNode.bps[0];
+  MZapBlock     zap{bp.getLogicalSize()};
+
+  if (!zpool.readVLObject(bp, /*dva_index=* /0, OUT zap.data())) {
+    return false;
+  }
+
+  ASSERT(zap->block_type == ZapBlockType::Micro,
+         "Cannot handle non-micro ZAP!");
+
+  for (const MZapEntry &entry : zap.entries()) {
+    std::fprintf(stderr, "")
+  }
+
+  return true;
+}*/
+
+static bool handleMOS(ZPool &zpool, const DNode *mos, size_t mosLength) {
+  /*for (size_t i = 0; i < mosLength; i++) {
+    const DNode &dnode = mos[i];
+    if (!dnode.isValid())
+      continue;
+
+    LOG("DNode of type %u\n", static_cast<u32>(dnode.type));
+  }*/
+
+  const DNode *rootDatasetNode;
+  if (!getRootDataset(zpool, mos, mosLength, OUT & rootDatasetNode)) {
+    LOG("Could not find the root dataset entry in an object directory!\n");
+    return false;
+  }
+
+  const DSLDir *rootDataset = rootDatasetNode->getBonusAs<DSLDir>();
+  // rootDataset->dump(stderr);
+
+  const DNode &     headDatasetNode = mos[rootDataset->head_dataset_obj];
+  const DSLDataSet *headDataset     = headDatasetNode.getBonusAs<DSLDataSet>();
+  // headDataset->dump(stderr);
+
+  ObjSet rootObjSet;
+  for (size_t root_dva = 0; root_dva < 2; root_dva++) {
+    if (!zpool.readObject(headDataset->bp, root_dva, OUT & rootObjSet)) {
+      LOG("Failed to read root ObjSet from dva %zu!\n", root_dva);
+      continue;
+    }
+
+    break;
+  }
+
+  rootObjSet.dump(stderr);
+
+  std::unique_ptr<DNode[]> dslNodes;
+  size_t                   ndslnodes;
+  const DNode *            masterNode =
+      getDSLNodes(zpool, rootObjSet, OUT & dslNodes, OUT & ndslnodes);
+  if (!masterNode) {
+    LOG("Could not get master node!\n");
+    return false;
+  }
+
+  masterNode->dump(stderr);
+
+  const Blkptr &masterBP = masterNode->bps[0];
+  MZapBlock     masterZAP{masterBP.getLogicalSize()};
+
+  if (!zpool.readVLObject(masterBP, /*dva=*/0, OUT masterZAP.data())) {
+    LOG("Could not read the master ZAP block!\n");
+    return false;
+  }
+
+  ASSERT0(masterZAP.isValid());
+
+  masterZAP.dump(stderr);
+
+  const MZapEntry *rootEntry = masterZAP.findEntry("ROOT");
+  if (!rootEntry) {
+    LOG("Could not find the MZapEntry for the filesystem root!\n");
+    return false;
+  }
+
+  const u64 rootDirIndex = rootEntry->value;
+  LOG("filesystem ROOT entry = %lu\n", rootDirIndex);
+
+  for (size_t i = 0; i < ndslnodes; i++) {
+    LOG("DSLNodes[%zu]: ", i);
+    dslNodes[i].dump(stderr);
+  }
+
+  const DNode &rootDirNode = dslNodes[rootDirIndex];
+  rootDirNode.dump(stderr, DumpFlags::AllowInvalid);
+
+  MZapBlock rootDirZAP{rootDirNode.bps[0].getLogicalSize()};
+  if (!zpool.readVLObject(rootDirNode.bps[0], /*dva=*/0,
+                          OUT rootDirZAP.data())) {
+    LOG("Could not read ZAP block for root directory!\n");
+    return false;
+  }
+
+  // ASSERT0(rootDirZAP.isValid());
+  rootDirZAP.dump(stderr);
+
+  return true;
+}
+
 static void handle_ub(ZPool &zpool, const Uberblock &ub) {
   ub.dump(stderr);
   std::fprintf(stderr, "\n");
@@ -65,12 +221,11 @@ static void handle_ub(ZPool &zpool, const Uberblock &ub) {
          "rootbp does not seem to point to an object!");
 
   ObjSet objset;
-  for (size_t vdev_index = 0; vdev_index < 1; vdev_index++) {
-    LOG(" -- following ub.rootbp with vdev = %zu\n", vdev_index);
-
-    if (!zpool.readObject(ub.rootbp, vdev_index, OUT & objset)) {
+  for (size_t root_dva = 0; root_dva < 3; root_dva++) {
+    LOG(" -- following ub.rootbp with dva = %zu\n", root_dva);
+    if (!zpool.readObject(ub.rootbp, root_dva, OUT & objset)) {
       LOG("Uberblock rootbp: could not read root objset!\n");
-      continue;
+      return;
     }
 
     objset.dump(stderr);
@@ -82,35 +237,21 @@ static void handle_ub(ZPool &zpool, const Uberblock &ub) {
       if (!bp.isValid())
         continue;
 
-      for (size_t vdev_index = 0; vdev_index < 1; vdev_index++) {
-        if (!bp.vdev[vdev_index].isValid())
+      for (size_t dva_index = 0; dva_index < 3; dva_index++) {
+        if (!bp.dva[dva_index].isValid())
           continue;
 
-        LOG(" -- following root objset.metadnode.bps[%zu] with vdev = %zu\n",
-            blkptr_index, vdev_index);
+        LOG(" -- following root objset.metadnode.bps[%zu] with dva = %zu\n",
+            blkptr_index, dva_index);
 
-        const size_t nread =
-            zpool.readObjectArray(bp, vdev_index, OUT & dnodes);
-
-        for (size_t i = 0; i < nread; i++) {
-          const DNode &dnode = dnodes[i];
-          if (!dnode.isValid())
-            continue;
-
-          LOG("DNode of type %u\n", dnode.type);
-
-          if (dnode.type == DNodeType::ObjDirectory) {
-            LOG("Found the object directory:\n");
-            dnode.dump(stderr);
-
-            u64 rootDataset;
-            if (getRootDataset(zpool, dnode, OUT & rootDataset)) {
-              LOG("root_dataset = %lx\n", rootDataset);
-            } else {
-              LOG("Could not find the root_dataset!!! :(\n");
-            }
-          }
+        const size_t nread = zpool.readObjectArray(bp, dva_index, OUT & dnodes);
+        if (!nread) {
+          LOG("Failed to read MOS object array!\n");
+          continue;
         }
+
+        if (handleMOS(zpool, dnodes.get(), nread))
+          return;
       }
     }
   }
@@ -141,12 +282,5 @@ int main(int argc, const char **argv) {
   }
 
   handle_ub(*zpool, ubs[max_txg_index]);
-
-  /*for (const Uberblock &ub : ubs) {
-    if (ub.validate()) {
-      handle_ub(*zpool, ub);
-    }
-  }*/
-
   return 0;
 }

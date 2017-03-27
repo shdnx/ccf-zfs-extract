@@ -58,7 +58,7 @@ static void print_indent(FILE *fp) {
 template <typename T>
 struct FieldFormat;
 
-#define FMT_PREFIX "%-15s = "
+#define FMT_PREFIX "%-20s = "
 #define FMT_SUFFIX "\n"
 
 #define FIELD_FORMAT(TYPE, VALUE_FMT)                                     \
@@ -163,7 +163,7 @@ void Blkptr::dump(FILE *fp, DumpFlags flags) const {
     DUMP_FIELD(birth_txg);
 
     for (size_t i = 0; i < 3; i++) {
-      INLINE_HEADER(fp, "vdev[%zu]: ", i) { vdev[i].dump(fp); }
+      INLINE_HEADER(fp, "dva[%zu]: ", i) { dva[i].dump(fp, flags); }
     }
 
     checkValid(fp, this);
@@ -180,7 +180,7 @@ void Uberblock::dump(FILE *fp, DumpFlags flags) const {
     DUMP_FIELD(timestamp);
     DUMP_FIELD(spa_version);
 
-    INLINE_HEADER(fp, "rootbp: ") { rootbp.dump(fp); }
+    INLINE_HEADER(fp, "rootbp: ") { rootbp.dump(fp, flags); }
 
     checkValid(fp, this);
   }
@@ -192,22 +192,24 @@ void DNode::dump(FILE *fp, DumpFlags flags) const {
     return;
   }
 
-  OBJECT_HEADER(fp, *this, "DNode:") {
+  OBJECT_HEADER(fp, *this, "DNode <%s>:", getDNodeTypeAsString(type)) {
+    DUMP_FIELD(type);
+    DUMP_FIELD(bonustype);
+    DUMP_FIELD(bonuslen);
+
     DUMP_FIELD(phys_comp);
     DUMP_FIELD(checksum);
     DUMP_FIELD(indblkshift);
     DUMP_FIELD(data_blk_size_secs);
     DUMP_FIELD(nblkptr);
     DUMP_FIELD(nlevels);
-    DUMP_FIELD(type);
-    DUMP_FIELD(bonuslen);
-    DUMP_FIELD(bonustype);
+
     DUMP_FIELD(flags);
     DUMP_FIELD(max_block_id);
     DUMP_FIELD(secphys_used);
 
     for (size_t i = 0; i < nblkptr; i++) {
-      INLINE_HEADER(fp, "bps[%zu]: ", i) { bps[i].dump(fp); }
+      INLINE_HEADER(fp, "bps[%zu]: ", i) { bps[i].dump(fp, flags); }
     }
 
     checkValid(fp, this);
@@ -223,7 +225,7 @@ void ObjSet::dump(FILE *fp, DumpFlags flags) const {
   OBJECT_HEADER(fp, *this, "ObjSet:") {
     DUMP_FIELD(type);
 
-    INLINE_HEADER(fp, "metadnode: ") { metadnode.dump(fp); }
+    INLINE_HEADER(fp, "metadnode: ") { metadnode.dump(fp, flags); }
 
     checkValid(fp, this);
   }
@@ -272,5 +274,53 @@ void MZapBlock::dump(FILE *fp, DumpFlags flags) const {
         INLINE_HEADER(fp, "[%zu]: ", i) { entries()[i].dump(fp, flags); }
       }
     }
+  }
+}
+
+void DSLDir::dump(FILE *fp, DumpFlags flags) const {
+  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "DSLDir: invalid\n");
+    return;
+  }
+
+  OBJECT_HEADER(fp, *this, "DSLDir:") {
+    DUMP_FIELD(creation_time);
+    DUMP_FIELD(head_dataset_obj);
+    DUMP_FIELD(parent_obj);
+    DUMP_FIELD(origin_obj);
+    DUMP_FIELD(child_dir_zapobj);
+    DUMP_FIELD(used_bytes);
+    DUMP_FIELD(compressed_bytes);
+    DUMP_FIELD(uncompressed_bytes);
+    DUMP_FIELD(flags);
+  }
+}
+
+void DSLDataSet::dump(FILE *fp, DumpFlags flags) const {
+  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "DSLDataSet: invalid\n");
+    return;
+  }
+
+  OBJECT_HEADER(fp, *this, "DSLDataSet:") {
+    DUMP_FIELD(dir_obj);
+    DUMP_FIELD(prev_snap_obj);
+    DUMP_FIELD(prev_snap_txg);
+    DUMP_FIELD(next_snap_obj);
+    DUMP_FIELD(snapnames_zapobj);
+    DUMP_FIELD(nchildren);
+
+    DUMP_FIELD(creation_time);
+    DUMP_FIELD(creation_txg);
+
+    DUMP_FIELD(referenced_bytes);
+    DUMP_FIELD(compressed_bytes);
+    DUMP_FIELD(uncompressed_bytes);
+    DUMP_FIELD(unique_bytes);
+
+    DUMP_FIELD(guid);
+    DUMP_FIELD(flags);
+
+    INLINE_HEADER(fp, "bp: ") { bp.dump(fp, flags); }
   }
 }

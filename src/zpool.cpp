@@ -104,15 +104,15 @@ static Compress getEffectiveCompression(Compress comp) {
   }
 }
 
-bool ZPool::readRawData(const Blkptr &bp, u32 vdev_index, OUT void *data) {
+bool ZPool::readRawData(const Blkptr &bp, u32 dva_index, OUT void *data) {
   ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
   ASSERT(bp.endian == Endian::Little, "Cannot handle big endian blkptr!");
 
   const size_t lsize = bp.getLogicalSize();
   const size_t psize = bp.getPhysicalSize();
 
-  const Dva &dva = bp.vdev[vdev_index];
-  ASSERT(dva.isValid(), "Cannot resolve invalid DVA at index %u!", vdev_index);
+  const Dva &dva = bp.dva[dva_index];
+  ASSERT(dva.isValid(), "Cannot resolve invalid DVA at index %u!", dva_index);
   ASSERT(!dva.gang_block, "Don't know how to resolve a gangblock DVA!");
 
   const u64    addr  = dva.getAddress();

@@ -49,7 +49,7 @@ struct Dva {
     return static_cast<size_t>(asize) << SECTOR_SHIFT;
   }
 
-  VALID_IF(asize != 0 && offset != 0);
+  VALID_IF(asize != 0);
   void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 } __attribute__((packed));
 
@@ -67,6 +67,28 @@ enum class DNodeType : u8 {
   MasterNode   = 21,
 };
 
+static inline const char *getDNodeTypeAsString(DNodeType dt) {
+#define DT(NAME)        \
+  case DNodeType::NAME: \
+    return #NAME
+
+  switch (dt) {
+    DT(Invalid);
+    DT(ObjDirectory);
+    DT(DNode);
+    DT(ObjSet);
+    DT(DataSet);
+    DT(FileContents);
+    DT(DirContents);
+    DT(MasterNode);
+
+  default:
+    return "(unknown)";
+  }
+
+#undef DT
+}
+
 // See include/sys/zio.h for a full list of compressions that ZFS-on-Linux
 // supports. The ZFS on-disk documentation here is not valid.
 enum class Compress : u8 {
@@ -79,7 +101,7 @@ enum class Compress : u8 {
 };
 
 struct Blkptr {
-  Dva vdev[3];
+  Dva dva[3];
 
   // -- props --
   u16      lsize;
@@ -147,11 +169,28 @@ struct DNode {
 
   // NOTE: this is not actually the full story, there are also bonus arrays, and
   // so on
-  Blkptr bps[3];
-  PADDING(64);
+  union {
+    Blkptr bps[3];
+
+    struct {
+      PADDING(sizeof(Blkptr));
+      u8 bonus[2 * sizeof(Blkptr) + 64];
+    };
+
+    struct {
+      PADDING(2 * sizeof(Blkptr) + 64);
+      Blkptr spill;
+    };
+  };
 
   VALID_IF(type != DNodeType::Invalid && nblkptr != 0 && nblkptr <= 3);
   void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
+
+  template <typename T>
+  const T *getBonusAs() const {
+    ASSERT0(bonustype != 0 && bonuslen != 0 && nblkptr < 3);
+    return reinterpret_cast<const T *>(bonus);
+  }
 } __attribute__((packed));
 
 static_assert(sizeof(DNode) == 512, "DNode!");
@@ -282,7 +321,32 @@ struct MZapBlock : ZFSBlock<MZapHeader, MZapEntry> {
   void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 };
 
-// this lives in the bonus area of DNode objects
+// lives in DNode bonus area
+struct DSLDir {
+  u64 creation_time; // unused by ZFS-on-Linux
+  u64 head_dataset_obj;
+  u64 parent_obj;
+  u64 origin_obj;
+  u64 child_dir_zapobj;
+  u64 used_bytes;
+  u64 compressed_bytes;
+  u64 uncompressed_bytes;
+  u64 quota;
+  u64 reserved;
+  u64 props_zapobj;
+  u64 deleg_zapobj;
+  u64 flags;
+  u64 used_breakdown[5]; // TODO: enum dd_used
+  u64 clones;
+  PADDING(13 * sizeof(u64));
+
+  VALID_IF(true);
+  void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
+} __attribute__((packed));
+
+static_assert(sizeof(DSLDir) == 256, "DSLDir definition invalid!");
+
+// lives in DNode bonus area
 struct DSLDataSet {
   u64    dir_obj;
   u64    prev_snap_obj;
