@@ -1,6 +1,8 @@
 #pragma once
 
-#include "common.h"
+#include "utils/common.h"
+
+namespace zfs {
 
 // stolen from zfs-on-linux byteorder.h
 
@@ -53,10 +55,4 @@ enum class Endian : bool { Little = 1, Big = 0 };
 #define SYSTEM_ENDIAN Endian::Little
 #endif
 
-void byteswap_obj(void *obj, std::size_t obj_size);
-
-#define CORRECT_BYTEORDER(ENDIAN, OBJ) \
-  do {                                 \
-    if ((ENDIAN) != SYSTEM_ENDIAN)     \
-      byteswap_obj(OBJ, sizeof(*OBJ)); \
-  } while (0)
+} // end namespace zfs

@@ -4,42 +4,45 @@
 #include <memory>
 #include <string>
 
-#include "common.h"
-#include "zfs-objects.h"
+#include "utils/common.h"
+#include "zfs/physical/blkptr.h"
 
 #define VDEV_NLABELS 4
 #define VDEV_LABEL_NUBERBLOCKS 128
 
-class ZPool {
-public:
-  static std::unique_ptr<ZPool> open(const std::string &path) {
+namespace zfs {
+
+struct ZPoolReader {
+  static std::unique_ptr<ZPoolReader> open(const std::string &path) {
     FILE *fp = std::fopen(path.c_str(), "rb");
     if (!fp)
       return nullptr;
 
-    return std::make_unique<ZPool>(fp, true);
+    return std::make_unique<ZPoolReader>(fp, true);
   }
 
-  explicit ZPool(FILE *fp, bool own = false) : m_fp{fp}, m_own{own} {}
+  explicit ZPoolReader(std::FILE *fp, bool own = false)
+      : m_fp{fp}, m_own{own} {}
 
-  ZPool(const ZPool &other) = delete;
+  ZPoolReader(const ZPoolReader &other) = delete;
 
-  ZPool(ZPool &&other) : m_fp{other.m_fp}, m_own{other.m_own} {
+  ZPoolReader(ZPoolReader &&other) : m_fp{other.m_fp}, m_own{other.m_own} {
     other.m_fp  = nullptr;
     other.m_own = false;
   }
 
-  ~ZPool() {
+  ~ZPoolReader() {
     if (m_own && m_fp)
       std::fclose(m_fp);
   }
 
   // label_index < VDEV_NLABELS, ub_index <= VDEV_LABEL_NUBERBLOCKS
-  bool readUberblock(u32 label_index, u32 ub_index, OUT Uberblock *ub);
+  bool readUberblock(u32 label_index, u32 ub_index,
+                     OUT physical::Uberblock *ub);
 
-  bool readRawData(const Blkptr &bp, u32 dva_index, OUT void *data);
+  bool readRawData(const physical::Blkptr &bp, u32 dva_index, OUT void *data);
 
-  bool readRawData(const Blkptr &bp, u32 dva_index,
+  bool readRawData(const physical::Blkptr &bp, u32 dva_index,
                    OUT std::unique_ptr<char[]> *pdata) {
     ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
 
@@ -55,7 +58,7 @@ public:
   }
 
   template <typename TObj>
-  bool readObject(const Blkptr &bp, u32 dva_index, OUT TObj *obj) {
+  bool readObject(const physical::Blkptr &bp, u32 dva_index, OUT TObj *obj) {
     ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
     ASSERT(bp.getLogicalSize() == sizeof(TObj),
            "Blkptr refers to a block of logical size %zu, whereas obj size is "
@@ -67,13 +70,14 @@ public:
 
   // variable length objects
   template <typename TObj>
-  bool readVLObject(const Blkptr &bp, u32 dva_index, OUT TObj *obj) {
+  bool readVLObject(const physical::Blkptr &bp, u32 dva_index, OUT TObj *obj) {
     ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
     return readRawData(bp, dva_index, OUT obj);
   }
 
   template <typename TObj>
-  size_t readObjectArray(const Blkptr &bp, u32 dva_index, OUT TObj *objs) {
+  size_t readObjectArray(const physical::Blkptr &bp, u32 dva_index,
+                         OUT TObj *objs) {
     ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
 
     const size_t lsize = bp.getLogicalSize();
@@ -88,7 +92,7 @@ public:
   }
 
   template <typename TObj>
-  size_t readObjectArray(const Blkptr &bp, u32 dva_index,
+  size_t readObjectArray(const physical::Blkptr &bp, u32 dva_index,
                          OUT std::unique_ptr<TObj[]> *pobjs) {
     ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
 
@@ -108,3 +112,5 @@ private:
   std::FILE *m_fp;
   bool       m_own;
 };
+
+} // end namespace zfs
