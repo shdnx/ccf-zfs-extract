@@ -55,6 +55,8 @@ enum class Compress : u8 {
   Default = LZ4
 };
 
+enum class Endian : bool { Little = 1, Big = 0 };
+
 // Each class representing a ZFS on-disk object has to:
 // - be POD
 // - be trivially default-constructible

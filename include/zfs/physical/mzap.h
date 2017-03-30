@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "zfs/blocks/headed.h"
+#include "zfs/block.h"
 #include "zfs/general.h"
 
 // ZAP = ZFS Attribute Processor
@@ -37,7 +37,7 @@ struct MZapHeader {
   PADDING(5 * sizeof(u64));
   MZapEntry entries[]; // VLA
 
-  static size_t getNumChunks(size_t block_size) {
+  static std::size_t getNumChunks(std::size_t block_size) {
     return (block_size - sizeof(MZapHeader)) / sizeof(MZapEntry);
   }
 
@@ -46,10 +46,11 @@ struct MZapHeader {
   void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 } __attribute__((packed));
 
-struct MZapBlock : HeadedBlock<MZapHeader, MZapEntry> {
-  explicit MZapBlock(size_t block_size) : ZFSBlock{block_size} {}
+struct MZapBlockPtr : HeadedBlockPtr<MZapHeader, MZapEntry> {
+  GEN_BLOCKPTR_SUPPORT(MZapBlockPtr,
+                       REFL(HeadedBlockPtr<MZapHeader, MZapEntry>)) {}
 
-  const MZapEntry *findEntry(const std::string &name) const {
+  const MZapEntry *findEntry(const std::string &name) {
     for (const MZapEntry &entry : entries()) {
       if (name == entry.name)
         return &entry;

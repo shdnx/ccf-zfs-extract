@@ -1,6 +1,7 @@
 #pragma once
 
 #include "utils/common.h"
+#include "zfs/general.h"
 
 namespace zfs {
 
@@ -46,8 +47,6 @@ void byteswap_uint64_array(void *vbuf, std::size_t size);
 void byteswap_uint32_array(void *vbuf, std::size_t size);
 void byteswap_uint16_array(void *vbuf, std::size_t size);
 void byteswap_uint8_array(void *vbuf, std::size_t size);
-
-enum class Endian : bool { Little = 1, Big = 0 };
 
 #ifdef _BIG_ENDIAN
 #define SYSTEM_ENDIAN Endian::Big

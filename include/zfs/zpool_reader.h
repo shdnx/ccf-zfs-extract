@@ -5,7 +5,9 @@
 #include <string>
 
 #include "utils/common.h"
+#include "zfs/block.h"
 #include "zfs/physical/blkptr.h"
+#include "zfs/physical/uberblock.h"
 
 #define VDEV_NLABELS 4
 #define VDEV_LABEL_NUBERBLOCKS 128
@@ -40,72 +42,27 @@ struct ZPoolReader {
   bool readUberblock(u32 label_index, u32 ub_index,
                      OUT physical::Uberblock *ub);
 
-  bool readRawData(const physical::Blkptr &bp, u32 dva_index, OUT void *data);
+  bool read(const physical::Blkptr &bp, u32 dva_index, OUT void *data);
 
-  bool readRawData(const physical::Blkptr &bp, u32 dva_index,
-                   OUT std::unique_ptr<char[]> *pdata) {
-    ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
+  BlockPtr read(const physical::Blkptr &pbp, u32 dva_index) {
+    ASSERT(pbp.isValid(), "Cannot resolve invalid blkptr!");
 
-    std::unique_ptr<char[]> buffer{new char[bp.getLogicalSize()]};
-    ASSERT(buffer, "Buffer allocation failed for size: %zu",
-           bp.getLogicalSize());
+    BlockPtr bp = BlockPtr::allocate(pbp.getLogicalSize());
+    if (!bp || !read(pbp, dva_index, OUT bp.data()))
+      return nullptr;
 
-    if (!readRawData(bp, dva_index, OUT static_cast<void *>(buffer.get())))
-      return false;
-
-    *pdata = std::move(buffer);
-    return true;
+    return std::move(bp);
   }
 
-  template <typename TObj>
-  bool readObject(const physical::Blkptr &bp, u32 dva_index, OUT TObj *obj) {
-    ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
-    ASSERT(bp.getLogicalSize() == sizeof(TObj),
-           "Blkptr refers to a block of logical size %zu, whereas obj size is "
-           "%zu: not a single object!",
-           bp.getLogicalSize(), sizeof(TObj));
-
-    return readRawData(bp, dva_index, OUT obj);
+  template <typename TPtr>
+  TPtr read(const physical::Blkptr &pbp, u32 dva_index) {
+    return read(pbp, dva_index).cast<TPtr>();
   }
 
-  // variable length objects
-  template <typename TObj>
-  bool readVLObject(const physical::Blkptr &bp, u32 dva_index, OUT TObj *obj) {
-    ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
-    return readRawData(bp, dva_index, OUT obj);
-  }
-
-  template <typename TObj>
-  size_t readObjectArray(const physical::Blkptr &bp, u32 dva_index,
-                         OUT TObj *objs) {
-    ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
-
-    const size_t lsize = bp.getLogicalSize();
-    ASSERT(lsize % sizeof(TObj) == 0, "Cannot read array of objects of size "
-                                      "%zu from a block with logical size %zu!",
-           sizeof(TObj), lsize);
-
-    if (!readRawData(bp, dva_index, OUT objs))
-      return 0;
-
-    return lsize / sizeof(TObj);
-  }
-
-  template <typename TObj>
-  size_t readObjectArray(const physical::Blkptr &bp, u32 dva_index,
-                         OUT std::unique_ptr<TObj[]> *pobjs) {
-    ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
-
-    const size_t lsize = bp.getLogicalSize();
-    ASSERT(lsize % sizeof(TObj) == 0, "Cannot read array of objects of size "
-                                      "%zu from a block with logical size %zu!",
-           sizeof(TObj), lsize);
-
-    if (!readRawData(bp, dva_index,
-                     OUT reinterpret_cast<std::unique_ptr<char[]> *>(pobjs)))
-      return 0;
-
-    return lsize / sizeof(TObj);
+  template <typename TPtr>
+  bool read(const physical::Blkptr &pbp, u32 dva_index, OUT TPtr *bp) {
+    *bp = read<TPtr>(pbp, dva_index);
+    return *bp;
   }
 
 private:

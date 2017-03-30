@@ -49,6 +49,10 @@ void _unreachable_fail(const char *func, const char *file, int line,
 // into a refrigator.
 #define REINTERPRET(WHAT, TYPE) (*reinterpret_cast<TYPE *>(&(WHAT)))
 
+// Needed when you want to pass something containing commas as a single macro
+// argument.
+#define REFL(...) __VA_ARGS__
+
 #define _CONCAT2_IMPL(A, B) A##B
 #define CONCAT2(A, B) _CONCAT2_IMPL(A, B)
 

@@ -2,12 +2,9 @@
 
 #include "common.h"
 
-// replace with C++17 std::array_view<T>
+// TODO: replace with C++17 std::array_view<T>
 template <typename T>
-struct ArrayView;
-
-template <typename T>
-struct ArrayView<T> {
+struct ArrayView {
   using iterator        = T *;
   using const_iterator  = const T *;
   using reference       = T &;

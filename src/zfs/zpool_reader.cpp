@@ -2,10 +2,12 @@
 
 #include "lz4.h"
 
-#include "log.h"
-#include "zpool.h"
+#include "utils/log.h"
+#include "zfs/zpool_reader.h"
 
 #define VDEV_LABEL_SIZE (KB * 256)
+
+namespace zfs {
 
 static bool seekToLabel(std::FILE *fp, u32 label_index) {
   switch (label_index) {
@@ -52,7 +54,7 @@ bool ZPool::readUberblock(u32 label_index, u32 ub_index, OUT Uberblock *ub) {
 #define BE_IN32(xa) (((u32)BE_IN16(xa) << 16) | BE_IN16((u8 *)(xa) + 2))
 #define BE_IN64(xa) (((u64)BE_IN32(xa) << 32) | BE_IN32((u8 *)(xa) + 4))
 
-static bool readLZ4CompressedData(FILE *fp, size_t lsize, size_t psize,
+static bool readLZ4CompressedData(std::FILE *fp, size_t lsize, size_t psize,
                                   OUT void *data, OUT int *result) {
   ASSERT(psize % SECTOR_SIZE == 0, "Non-sector aligned physical size: %zu",
          psize);
@@ -104,7 +106,8 @@ static Compress getEffectiveCompression(Compress comp) {
   }
 }
 
-bool ZPool::readRawData(const Blkptr &bp, u32 dva_index, OUT void *data) {
+bool ZPool::readRawData(const physical::Blkptr &bp, u32 dva_index,
+                        OUT void *data) {
   ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
   ASSERT(bp.endian == Endian::Little, "Cannot handle big endian blkptr!");
 
@@ -151,3 +154,5 @@ bool ZPool::readRawData(const Blkptr &bp, u32 dva_index, OUT void *data) {
     UNREACHABLE("Unhandled compression: %u!", static_cast<u32>(comp));
   }
 }
+
+} // end namespace zfs

@@ -26,38 +26,36 @@ struct DataBlock {
   void *      data() { return m_data; }
   const void *data() const { return m_data; }
 
-  /*template <typename T>
-  T &asObject() {
-    return *reinterpret_cast<T *>(data());
-  }
-
-  template <typename T>
-  const T &asObject() {
-    return *reinterpret_cast<const T *>(data());
-  }
-
-  template <typename T>
-  ArrayView<T> asArray() {
-    return ArrayView<T>{m_data.get(), m_size};
-  }*/
-
 private:
   void * m_data;
   size_t m_size;
 };
 
 // An owning block pointer.
+// NOTE: this class can be derived from, but derived classes CANNOT add any
+// extra fields, or increase the size in any way. It has to be possible for a
+// BlockPtr to be reinterpreted as an object of any child class.
 struct BlockPtr {
-  static BlockPtr allocateRaw(size_t dataSize) {
+  static const BlockPtr null;
+
+  template <typename T>
+  static T allocate(size_t dataSize) {
+    ASSERT0(sizeof(T) == sizeof(BlockPtr));
+
     char *data = new char[sizeof(DataBlock) + dataSize];
     if (!data)
-      return BlockPtr{};
+      return T{};
 
-    new (data) DataBlock{dataSize};
-    return BlockPtr{data};
+    return T{new (data) DataBlock{data + sizeof(DataBlock), dataSize}};
+  }
+
+  static BlockPtr allocate(size_t dataSize) {
+    return allocate<BlockPtr>(dataSize);
   }
 
   BlockPtr() : m_ptr{nullptr} {}
+  /* implicit */ BlockPtr(std::nullptr_t) : BlockPtr{} {}
+
   explicit BlockPtr(DataBlock *ptr) : m_ptr{ptr} {}
 
   BlockPtr(const BlockPtr &) = delete;
@@ -79,7 +77,28 @@ struct BlockPtr {
 
   /* implicit */ operator bool() const { return m_ptr; }
 
-  void destroy() { delete[] reinterpret_cast<char *>(m_ptr); }
+  void destroy() {
+    if (m_ptr)
+      delete[] reinterpret_cast<char *>(m_ptr);
+  }
+
+  template <typename T>
+  T &getAs() {
+    ASSERT0(sizeof(T) == sizeof(BlockPtr));
+    return *static_cast<T *>(this);
+  }
+
+  template <typename T>
+  const T &getAs() {
+    ASSERT0(sizeof(T) == sizeof(BlockPtr));
+    return *static_cast<const T *>(this);
+  }
+
+  template <typename T>
+  T cast() && {
+    ASSERT0(sizeof(T) == sizeof(BlockPtr));
+    return static_cast<T>(std::move(*this));
+  }
 
 private:
   DataBlock *m_ptr;
@@ -88,23 +107,29 @@ private:
 using BlockRef  = BlockPtr &;
 using BlockCRef = const BlockPtr &;
 
-struct IndirectBlockPtr : BlockPtr {};
+#define GEN_BLOCKPTR_SUPPORT(NAME, BASE)         \
+  static NAME allocate(std::size_t dataSize) {   \
+    return BlockPtr::allocate<NAME>(dataSize);   \
+  }                                              \
+                                                 \
+  NAME() = default;                              \
+  NAME(std::nullptr_t) : NAME{} {}               \
+  NAME(BlockPtr &&rhs) : BASE{std::move(rhs)} {} \
+  /*NAME(NAME &&rhs) = default;*/                \
+  NAME &operator=(BlockPtr &&rhs) {              \
+    BASE::operator=(std::move(rhs));             \
+    return *this;                                \
+  }                                              \
+  /*NAME &operator=(NAME &&rhs) = default;*/     \
+  explicit NAME(DataBlock *ptr) : BASE { ptr }
 
 template <typename T>
-struct ObjBlockPtr;
+struct ObjBlockPtr : BlockPtr {
+  GEN_BLOCKPTR_SUPPORT(ObjBlockPtr, BlockPtr) {
+    ASSERT0(ptr->size() == sizeof(T));
+  }
 
-template <typename T>
-struct ObjBlockPtr<T> : BlockPtr {
-  ObjBlockPtr() = default;
-
-  explicit ObjBlockPtr(DataBlock *ptr) : BlockPtr{ptr} {}
-  ObjBlockPtr(BlockPtr &&rhs)    = default;
-  ObjBlockPtr(ObjBlockPtr &&rhs) = default;
-
-  ObjBlockPtr &operator=(BlockPtr &&rhs) = default;
-  ObjBlockPtr &operator=(ObjBlockPtr &&rhs) = default;
-
-  T *      object() { reinterpret_cast<T *>(data()) }
+  T *      object() { reinterpret_cast<T *>(data()); }
   const T *object() const { return reinterpret_cast<const T *>(data()); }
 
   T *operator->() { return object(); }
@@ -116,15 +141,9 @@ struct ObjBlockPtr<T> : BlockPtr {
 
 template <typename T>
 struct ObjBlockPtr<T[]> : BlockPtr {
-  ObjBlockPtr() = default;
-
-  explicit ObjBlockPtr(DataBlock *ptr) : BlockPtr{ptr} {}
-
-  ObjBlockPtr(BlockPtr &&rhs)    = default;
-  ObjBlockPtr(ObjBlockPtr &&rhs) = default;
-
-  ObjBlockPtr &operator=(BlockPtr &&rhs) = default;
-  ObjBlockPtr &operator=(ObjBlockPtr &&rhs) = default;
+  GEN_BLOCKPTR_SUPPORT(ObjBlockPtr, BlockPtr) {
+    ASSERT0(ptr->size() % sizeof(T) == 0);
+  }
 
   ArrayView<T> objects() { return ArrayView<T>{data(), size()}; }
   size_t       numObjects() { return objects().size(); }
@@ -141,18 +160,10 @@ using ArrayBlockRef = ArrayBlockPtr<T> &;
 
 template <typename THeader, typename TEntry>
 struct HeadedBlockPtr : BlockPtr {
-  HeadedBlockPtr() = default;
-
-  explicit HeadedBlockPtr(DataBlock *ptr) : BlockPtr{ptr} {
-    ASSERT0(size() >= sizeof(THeader));
-    ASSERT0((size() - sizeof(THeader)) % sizeof(TEntry) == 0);
+  GEN_BLOCKPTR_SUPPORT(HeadedBlockPtr, BlockPtr) {
+    ASSERT0(ptr->size() >= sizeof(THeader));
+    ASSERT0((ptr->size() - sizeof(THeader)) % sizeof(TEntry) == 0);
   }
-
-  HeadedBlockPtr(BlockPtr &&rhs)       = default;
-  HeadedBlockPtr(HeadedBlockPtr &&rhs) = default;
-
-  HeadedBlockPtr &operator=(BlockPtr &&rhs) = default;
-  HeadedBlockPtr &operator=(HeadedBlockPtr &&rhs) = default;
 
   THeader *      header() { reinterpret_cast<THeader *>(data()); }
   const THeader *header() const { reinterpret_cast<const THeader *>(data()); }
