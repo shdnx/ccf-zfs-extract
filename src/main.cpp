@@ -1,4 +1,5 @@
 #include <memory>
+#include <sys/stat.h> // mkdir
 #include <vector>
 
 #include "utils/array_view.h"
@@ -34,9 +35,8 @@ static bool getRootDataset(ZPoolReader &reader, const physical::DNode &objDir,
   return false;
 }
 
-// TODO: the MOS should probably also be an indirect block
-static physical::DNode *getRootDataset(ZPoolReader &                  reader,
-                                       ArrayBlockRef<physical::DNode> mos) {
+static physical::DNode *getRootDataset(ZPoolReader &reader,
+                                       IndirectObjBlock<physical::DNode> &mos) {
   for (const physical::DNode &dnode : mos.objects()) {
     if (!dnode.isValid())
       continue;
@@ -47,7 +47,7 @@ static physical::DNode *getRootDataset(ZPoolReader &                  reader,
 
       u64 rootDatasetIndex;
       if (getRootDataset(reader, dnode, OUT & rootDatasetIndex))
-        return &mos[rootDatasetIndex];
+        return &mos.objectByID(rootDatasetIndex);
     }
   }
 
@@ -57,6 +57,10 @@ static physical::DNode *getRootDataset(ZPoolReader &                  reader,
 static bool extractFileContents(ZPoolReader &          reader,
                                 const physical::DNode &dnode,
                                 const std::string &    outFile) {
+  ASSERT0(dnode.type == DNodeType::FileContents);
+
+  LOG("Extracting file to %s...\n", outFile.c_str());
+
   IndirectBlock indirectBlock{reader, dnode};
   LOG("File total size: %zu, indirect block size: %zu, num data blocks: %zu\n",
       indirectBlock.size(), indirectBlock.indirectBlockSize(),
@@ -78,15 +82,59 @@ static bool extractFileContents(ZPoolReader &          reader,
   return true;
 }
 
-static bool handleMOS(ZPoolReader &reader, ArrayBlockRef<physical::DNode> mos) {
-  /*for (size_t i = 0; i < mosLength; i++) {
-    const DNode &dnode = mos[i];
-    if (!dnode.isValid())
+enum class DirEntryFlags : u64 {
+  Dir  = 0x4000000000000000,
+  File = 0x8000000000000000
+};
+
+static std::size_t
+extractDirContents(ZPoolReader &                      reader,
+                   IndirectObjBlock<physical::DNode> &dslBlock,
+                   const physical::DNode &dnode, const std::string &outDir) {
+  ASSERT0(dnode.type == DNodeType::DirContents);
+
+  LOG("Extracting directory to '%s'...\n", outDir.c_str());
+  dnode.dump(stderr);
+
+  const int mkresult = mkdir(outDir.c_str(), S_IRWXU | S_IRWXG | S_IRWXO);
+  if (mkresult != 0 && mkresult != EEXIST) {
+    LOG("Failed to create directory, error code: %d\n", mkresult);
+    return 0;
+  }
+
+  auto dirZap = reader.read<MZapBlockPtr>(dnode.bps[0], /*dva=*/0);
+  if (!dirZap) {
+    LOG("Failed to read the ZAP block belonging to the DirContents DNode, "
+        "skipping!\n");
+    return 0;
+  }
+
+  std::size_t nfiles = 0;
+  for (const physical::MZapEntry &entry : dirZap.entries()) {
+    if (!entry.isValid())
       continue;
 
-    LOG("DNode of type %u\n", static_cast<u32>(dnode.type));
-  }*/
+    if (flag_isset(entry.value, DirEntryFlags::Dir)) {
+      const u64 nodeID = entry.value - static_cast<u64>(DirEntryFlags::Dir);
+      nfiles +=
+          extractDirContents(reader, dslBlock, dslBlock.objectByID(nodeID),
+                             outDir + "/" + entry.name);
+    } else if (flag_isset(entry.value, DirEntryFlags::File)) {
+      const u64 nodeID = entry.value - static_cast<u64>(DirEntryFlags::File);
+      if (extractFileContents(reader, dslBlock.objectByID(nodeID),
+                              outDir + "/" + entry.name))
+        nfiles++;
+    } else {
+      LOG("Unrecognised flag in directory ZAP entry, ignoring: ");
+      entry.dump(stderr);
+    }
+  }
 
+  return nfiles;
+}
+
+static bool handleMOS(ZPoolReader &                      reader,
+                      IndirectObjBlock<physical::DNode> &mos) {
   physical::DNode *rootDatasetNode = getRootDataset(reader, mos);
   if (!rootDatasetNode) {
     LOG("Could not find the root dataset entry in an object directory!\n");
@@ -96,7 +144,8 @@ static bool handleMOS(ZPoolReader &reader, ArrayBlockRef<physical::DNode> mos) {
   auto rootDataset = rootDatasetNode->getBonusAs<physical::DSLDir>();
   // rootDataset->dump(stderr);
 
-  const physical::DNode &headDatasetNode = mos[rootDataset->head_dataset_obj];
+  const physical::DNode &headDatasetNode =
+      mos.objectByID(rootDataset->head_dataset_obj);
   auto headDataset = headDatasetNode.getBonusAs<physical::DSLDataSet>();
   // headDataset->dump(stderr);
 
@@ -121,40 +170,16 @@ static bool handleMOS(ZPoolReader &reader, ArrayBlockRef<physical::DNode> mos) {
   }
 
   const u64 rootDirObjID = rootEntry->value;
-  LOG("filesystem ROOT entry obj id = %lu\n", rootDirObjID);
+  LOG("Extracting filesystem root (objid = %lu)...\n", rootDirObjID);
 
-  for (std::size_t i = 0; i < dslBlock.numObjects(); i++) {
-    const physical::DNode &dslNode = dslBlock.objectByID(i);
-    if (!dslNode.isValid())
-      continue;
-
-    LOG("DSLNodes[%zu]: ", i);
-    dslNode.dump(stderr);
-
-    if (dslNode.type == DNodeType::FileContents) {
-      extractFileContents(reader, dslNode, "extracted.txt");
-    }
-  }
-
-#if 0
-  const DNode &rootDirNode = dslNodes[rootDirIndex];
-  rootDirNode.dump(stderr, DumpFlags::AllowInvalid);
-
-  MZapBlock rootDirZAP{rootDirNode.bps[0].getLogicalSize()};
-  if (!zpool.readVLObject(rootDirNode.bps[0], /*dva=*/0,
-                          OUT rootDirZAP.data())) {
-    LOG("Could not read ZAP block for root directory!\n");
-    return false;
-  }
-
-  // ASSERT0(rootDirZAP.isValid());
-  rootDirZAP.dump(stderr);
-#endif
+  const std::size_t nfiles = extractDirContents(
+      reader, dslBlock, dslBlock.objectByID(rootDirObjID), "extracted2");
+  LOG("Finished extracting %zu files!\n", nfiles);
 
   return true;
 }
 
-static void handle_ub(ZPoolReader &zpool, const physical::Uberblock &ub) {
+static void handle_ub(ZPoolReader &reader, const physical::Uberblock &ub) {
   ub.dump(stderr);
   std::fprintf(stderr, "\n");
 
@@ -162,39 +187,15 @@ static void handle_ub(ZPoolReader &zpool, const physical::Uberblock &ub) {
          "rootbp does not seem to point to an object!");
 
   ObjBlockPtr<physical::ObjSet> objset;
-  for (size_t root_dva = 0; root_dva < 3; root_dva++) {
-    LOG(" -- following ub.rootbp with dva = %zu\n", root_dva);
-    if (!zpool.read(ub.rootbp, root_dva, OUT & objset)) {
-      LOG("Uberblock rootbp: could not read root objset!\n");
-      return;
-    }
-
-    objset->dump(stderr);
-
-    ArrayBlockPtr<physical::DNode> dnodes;
-    for (size_t blkptr_index = 0; blkptr_index < objset->metadnode.nblkptr;
-         blkptr_index++) {
-      const physical::Blkptr &bp = objset->metadnode.bps[blkptr_index];
-      if (!bp.isValid())
-        continue;
-
-      for (size_t dva_index = 0; dva_index < 3; dva_index++) {
-        if (!bp.dva[dva_index].isValid())
-          continue;
-
-        LOG(" -- following root objset.metadnode.bps[%zu] with dva = %zu\n",
-            blkptr_index, dva_index);
-
-        if (!zpool.read(bp, dva_index, OUT & dnodes)) {
-          LOG("Failed to read MOS object array!\n");
-          continue;
-        }
-
-        if (handleMOS(zpool, dnodes))
-          return;
-      }
-    }
+  if (!reader.read(ub.rootbp, /*dva=*/0, OUT & objset)) {
+    LOG("Uberblock rootbp: could not read root objset!\n");
+    return;
   }
+
+  objset->dump(stderr);
+
+  IndirectObjBlock<physical::DNode> objsetBlock{reader, objset->metadnode};
+  handleMOS(reader, objsetBlock);
 }
 
 int main(int argc, const char **argv) {
