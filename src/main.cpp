@@ -1,4 +1,5 @@
 #include <memory>
+#include <set>
 #include <sys/stat.h> // mkdir
 #include <vector>
 
@@ -90,7 +91,8 @@ enum class DirEntryFlags : u64 {
 static std::size_t
 extractDirContents(ZPoolReader &                      reader,
                    IndirectObjBlock<physical::DNode> &dslBlock,
-                   const physical::DNode &dnode, const std::string &outDir) {
+                   const physical::DNode &dnode, const std::string &outDir,
+                   std::set<const physical::DNode *> &extractedNodes) {
   ASSERT0(dnode.type == DNodeType::DirContents);
 
   LOG("Extracting directory to '%s'...\n", outDir.c_str());
@@ -114,22 +116,36 @@ extractDirContents(ZPoolReader &                      reader,
     if (!entry.isValid())
       continue;
 
+    std::string entryPath = outDir + "/" + entry.name;
+
     if (flag_isset(entry.value, DirEntryFlags::Dir)) {
       const u64 nodeID = entry.value - static_cast<u64>(DirEntryFlags::Dir);
-      nfiles +=
-          extractDirContents(reader, dslBlock, dslBlock.objectByID(nodeID),
-                             outDir + "/" + entry.name);
+      const physical::DNode &dirNode = dslBlock.objectByID(nodeID);
+
+      try {
+        nfiles += extractDirContents(reader, dslBlock, dirNode, entryPath,
+                                     extractedNodes);
+
+        extractedNodes.insert(&dirNode);
+      } catch (const std::exception &ex) {
+        LOG("Error: cannot extract directory contents of %s: %s\n",
+            entryPath.c_str(), ex.what());
+      }
     } else if (flag_isset(entry.value, DirEntryFlags::File)) {
       const u64 nodeID = entry.value - static_cast<u64>(DirEntryFlags::File);
-      if (extractFileContents(reader, dslBlock.objectByID(nodeID),
-                              outDir + "/" + entry.name))
+      const physical::DNode &fileNode = dslBlock.objectByID(nodeID);
+
+      if (extractFileContents(reader, fileNode, entryPath)) {
+        extractedNodes.insert(&fileNode);
         nfiles++;
+      }
     } else {
       LOG("Unrecognised flag in directory ZAP entry, ignoring: ");
       entry.dump(stderr);
     }
   }
 
+  extractedNodes.insert(&dnode);
   return nfiles;
 }
 
@@ -172,10 +188,47 @@ static bool handleMOS(ZPoolReader &                      reader,
   const u64 rootDirObjID = rootEntry->value;
   LOG("Extracting filesystem root (objid = %lu)...\n", rootDirObjID);
 
-  const std::size_t nfiles = extractDirContents(
-      reader, dslBlock, dslBlock.objectByID(rootDirObjID), "extracted2");
-  LOG("Finished extracting %zu files!\n", nfiles);
+  std::set<const physical::DNode *> extractedNodes;
+  std::size_t                       nfiles = 0;
 
+  try {
+    nfiles =
+        extractDirContents(reader, dslBlock, dslBlock.objectByID(rootDirObjID),
+                           "extracted", extractedNodes);
+    LOG("Finished extracting %zu files!\n", nfiles);
+  } catch (const std::exception &ex) {
+    LOG("Could not extract the root directory: %s\n", ex.what());
+  }
+
+  LOG("Looking for an extracting unreferenced files and directories...\n");
+  int counter = -1;
+  for (const physical::DNode &dnode : dslBlock.objects()) {
+    counter++;
+    if (!dnode.isValid() || extractedNodes.count(&dnode))
+      continue;
+
+    if (dnode.type == DNodeType::DirContents) {
+      try {
+        extractDirContents(reader, dslBlock, dnode,
+                           "extracted_dangling_dir" + std::to_string(counter),
+                           extractedNodes);
+      } catch (const std::exception &ex) {
+        LOG("Failed to extract dangling directory (node ID) %d: %s\n", counter,
+            ex.what());
+      }
+    } else if (dnode.type == DNodeType::FileContents) {
+      try {
+        extractFileContents(reader, dnode, "extracted_dangling_file" +
+                                               std::to_string(counter));
+        extractedNodes.insert(&dnode);
+      } catch (const std::exception &ex) {
+        LOG("Failed to extract dangling file (node ID %d): %s\n", counter,
+            ex.what());
+      }
+    }
+  }
+
+  LOG("All done!\n");
   return true;
 }
 

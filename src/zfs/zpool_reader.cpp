@@ -109,15 +109,21 @@ static Compress getEffectiveCompression(Compress comp) {
 
 bool ZPoolReader::read(const physical::Blkptr &bp, u32 dva_index,
                        OUT void *data) {
-  ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
-  ASSERT(bp.endian == Endian::Little, "Cannot handle big endian blkptr!");
+  if (!bp.isValid())
+    throw ZPoolReaderException{&bp, nullptr, "Cannot resolve invalid blkptr!"};
+
+  if (bp.endian != Endian::Little)
+    throw UnsupportedException{"Big endian block pointers"};
 
   const std::size_t lsize = bp.getLogicalSize();
   const std::size_t psize = bp.getPhysicalSize();
 
   const physical::Dva &dva = bp.dva[dva_index];
-  ASSERT(dva.isValid(), "Cannot resolve invalid DVA at index %u!", dva_index);
-  ASSERT(!dva.gang_block, "Don't know how to resolve a gangblock DVA!");
+  if (!dva.isValid())
+    throw ZPoolReaderException{&bp, &dva, "Cannot resolve invalid DVA!"};
+
+  if (dva.gang_block)
+    throw UnsupportedException{"gang blocks"};
 
   const u64         addr  = dva.getAddress();
   const std::size_t asize = dva.getAllocatedSize();
@@ -152,8 +158,25 @@ bool ZPoolReader::read(const physical::Blkptr &bp, u32 dva_index,
     return true;
 
   default:
-    UNREACHABLE("Unhandled compression: %u!", static_cast<u32>(comp));
+    throw UnsupportedException{"unknown compression method " +
+                               std::to_string(static_cast<u32>(comp))};
   }
+}
+
+BlockPtr ZPoolReader::read(const physical::Blkptr &pbp, u32 dva_index) {
+  if (!pbp.isValid())
+    throw ZPoolReaderException{&pbp, nullptr, "Cannot resolve invalid blkptr!"};
+
+  BlockPtr bp = BlockPtr::allocate(pbp.getLogicalSize());
+  if (!bp)
+    throw ZPoolReaderException{&pbp, nullptr,
+                               "Failed to allocate memory for block of size " +
+                                   std::to_string(pbp.getLogicalSize())};
+
+  if (!read(pbp, dva_index, OUT bp.data()))
+    return nullptr;
+
+  return std::move(bp);
 }
 
 } // end namespace zfs

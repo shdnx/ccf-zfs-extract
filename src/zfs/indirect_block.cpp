@@ -38,17 +38,31 @@ IndirectBlockNode *IndirectBlockNode::readIndirectChild(ZPoolReader &reader,
   return &m_children[index];
 }
 
-detail::IndirectBlockNode *IndirectBlockBase::_getChildNode(u64  blockid,
-                                                            bool allowRead) {
+IndirectBlockBase::IndirectBlockBase(ZPoolReader &          reader,
+                                     const physical::DNode &root)
+    : m_reader{&reader}, m_dnode{&root} {
+  for (std::size_t i = 0; i < root.nblkptr; i++) {
+    if (!root.bps[i].isValid())
+      break;
+
+    m_roots.emplace_back();
+    m_roots[i].init(root.bps[i], numLevels());
+  }
+}
+
+IndirectBlockNode *IndirectBlockBase::_getChildNode(u64  blockid,
+                                                    bool allowRead) {
   ASSERT0(blockid < numDataBlocks());
 
   // first have to choose between the DNode's own blkptrs
-  // TODO: how?????
-  // const std::size_t          blocksPerRoot = numDataBlocks() /
-  // m_roots.size();
-  // const std::size_t          rootIndex     = blockid / blocksPerRoot;
-  const std::size_t          rootIndex = 0;
-  detail::IndirectBlockNode *node      = &m_roots[rootIndex];
+  const std::size_t blocksPerRoot = numDataBlocks() / m_roots.size();
+  ASSERT0(blocksPerRoot > 0);
+
+  const std::size_t rootIndex = blockid / blocksPerRoot;
+  ASSERT0(rootIndex < m_roots.size());
+
+  // const std::size_t  rootIndex = 0;
+  IndirectBlockNode *node = &m_roots[rootIndex];
 
   // then come the indirect block levels, which are just arrays of blkptrs
   // for (int level = numLevels() - 1; level > 0; level--) {

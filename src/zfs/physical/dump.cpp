@@ -204,7 +204,7 @@ void DNode::dump(std::FILE *fp, DumpFlags flags) const {
     DUMP_FIELD(phys_comp);
     DUMP_FIELD(checksum);
     DUMP_FIELD(indblkshift);
-    DUMP_FIELD(data_sectors);
+    DUMP_FIELD(datablksecsize);
     DUMP_FIELD(nblkptr);
     DUMP_FIELD(nlevels);
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdio>
+#include <exception>
 #include <memory>
 #include <string>
 
@@ -14,9 +15,36 @@
 
 namespace zfs {
 
+struct ZPoolReaderException : std::exception {
+  explicit ZPoolReaderException(const physical::Blkptr *bp,
+                                const physical::Dva *   dva,
+                                const std::string &     msg)
+      : m_bp{bp}, m_dva{dva}, m_msg{msg} {}
+
+  const physical::Blkptr *blkptr() const { return m_bp; }
+  const physical::Dva *   dva() const { return m_dva; }
+
+  const char *what() const noexcept override { return m_msg.c_str(); }
+
+private:
+  const physical::Blkptr *m_bp;
+  const physical::Dva *   m_dva;
+  std::string             m_msg;
+};
+
+struct UnsupportedException : std::exception {
+  explicit UnsupportedException(const std::string &msg)
+      : m_msg{"Unsupported feature: " + msg} {}
+
+  const char *what() const noexcept override { return m_msg.c_str(); }
+
+private:
+  std::string m_msg;
+};
+
 struct ZPoolReader {
   static std::unique_ptr<ZPoolReader> open(const std::string &path) {
-    FILE *fp = std::fopen(path.c_str(), "rb");
+    std::FILE *fp = std::fopen(path.c_str(), "rb");
     if (!fp)
       return nullptr;
 
@@ -43,16 +71,7 @@ struct ZPoolReader {
                      OUT physical::Uberblock *ub);
 
   bool read(const physical::Blkptr &bp, u32 dva_index, OUT void *data);
-
-  BlockPtr read(const physical::Blkptr &pbp, u32 dva_index) {
-    ASSERT(pbp.isValid(), "Cannot resolve invalid blkptr!");
-
-    BlockPtr bp = BlockPtr::allocate(pbp.getLogicalSize());
-    if (!bp || !read(pbp, dva_index, OUT bp.data()))
-      return nullptr;
-
-    return std::move(bp);
-  }
+  BlockPtr read(const physical::Blkptr &pbp, u32 dva_index);
 
   template <typename TPtr>
   TPtr read(const physical::Blkptr &pbp, u32 dva_index) {

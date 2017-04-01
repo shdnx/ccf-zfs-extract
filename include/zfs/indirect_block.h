@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <vector>
 
 #include "utils/iterator_range.h"
@@ -37,12 +36,7 @@ private:
 };
 
 struct IndirectBlockBase {
-  explicit IndirectBlockBase(ZPoolReader &reader, const physical::DNode &root)
-      : m_reader{&reader}, m_dnode{&root} {
-    for (std::size_t i = 0; i < root.nblkptr; i++) {
-      m_roots[i].init(root.bps[i], numLevels());
-    }
-  }
+  explicit IndirectBlockBase(ZPoolReader &reader, const physical::DNode &root);
 
   ZPoolReader &          reader() { return *m_reader; }
   const physical::DNode &root() const { return *m_dnode; }
@@ -50,7 +44,7 @@ struct IndirectBlockBase {
   std::size_t numLevels() const { return m_dnode->nlevels; }
   std::size_t indirectBlockSize() const { return 1uL << m_dnode->indblkshift; }
   std::size_t dataBlockSize() const {
-    return m_dnode->data_sectors << SECTOR_SHIFT;
+    return m_dnode->datablksecsize << SECTOR_SHIFT;
   }
   std::size_t numDataBlocks() const { return m_dnode->max_block_id + 1; }
 
@@ -91,9 +85,9 @@ private:
 
   detail::IndirectBlockNode *_getChildNode(u64 blockid, bool allowRead);
 
-  ZPoolReader *          m_reader;
-  const physical::DNode *m_dnode;
-  std::array<detail::IndirectBlockNode, 3> m_roots;
+  ZPoolReader *                          m_reader;
+  const physical::DNode *                m_dnode;
+  std::vector<detail::IndirectBlockNode> m_roots;
 };
 
 template <typename T>

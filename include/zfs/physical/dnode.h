@@ -16,7 +16,7 @@ struct DNode {
   u8 phys_comp; // physical compress flag?
   u8 flags;
 
-  u16 data_sectors;
+  u16 datablksecsize;
   u16 bonuslen;
   PADDING(4);
 
