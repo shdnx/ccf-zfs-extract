@@ -44,13 +44,21 @@ struct IndirectBlockBase {
     }
   }
 
-  ZPoolReader &reader() { return *m_reader; }
-  std::size_t  numLevels() const { return m_dnode->nlevels; }
-  std::size_t  indirectBlockSize() const { return 1uL << m_dnode->indblkshift; }
-  std::size_t  size() const { return m_dnode->data_sectors << SECTOR_SHIFT; }
+  ZPoolReader &          reader() { return *m_reader; }
   const physical::DNode &root() const { return *m_dnode; }
 
+  std::size_t numLevels() const { return m_dnode->nlevels; }
+  std::size_t indirectBlockSize() const { return 1uL << m_dnode->indblkshift; }
+  std::size_t dataBlockSize() const {
+    return m_dnode->data_sectors << SECTOR_SHIFT;
+  }
   std::size_t numDataBlocks() const { return m_dnode->max_block_id + 1; }
+
+  // Total data size represented by this indirect block.
+  // Note that this is usually not exactly precise, only gives the file size on
+  // a data block size granularity. Some metadata somewhere else likely stores
+  // the exact size.
+  std::size_t size() const { return numDataBlocks() * dataBlockSize(); }
 
   // The total number of data blocks this indirect block could maximum
   // reference.
@@ -93,7 +101,7 @@ struct IndirectBlockBlockIterator {
   explicit IndirectBlockBlockIterator(T &block, u64 blockid)
       : m_block{&block}, m_blockid{blockid} {}
 
-  auto operator*() { return m_block->blockByID(m_blockid); }
+  auto &operator*() { return m_block->blockByID(m_blockid); }
 
   IndirectBlockBlockIterator &operator++() {
     m_blockid++;
@@ -131,8 +139,15 @@ struct IndirectBlock : detail::IndirectBlockBase {
   BlockRef blockByID(u64 blockid) { return blockByIDImpl(blockid); }
   BlockPtr *blockByID(u64 blockid) const { return blockByIDImpl(blockid); }
 
-  iterator begin() { return iterator{*this, 0}; }
-  iterator end() { return iterator{*this, numDataBlocks()}; }
+  block_iterator block_begin() { return block_iterator{*this, 0}; }
+  block_iterator block_end() { return block_iterator{*this, numDataBlocks()}; }
+
+  IteratorRange<block_iterator> blocks() {
+    return {block_begin(), block_end()};
+  }
+
+  iterator begin() { return block_begin(); }
+  iterator end() { return block_end(); }
 
   // TODO: we could also have a const_iterator that skips over the unread parts,
   // but... it's messy
@@ -192,13 +207,8 @@ struct IndirectObjBlock : detail::IndirectBlockBase {
     return blockByIDImpl(blockid).template cast<ArrayBlockRef<TObj>>();
   }
 
-  bool blockByID(u64 blockid, OUT const ArrayBlockPtr<TObj> **bp) const {
-    BlockPtr *ptr;
-    if (!blockByIDImpl(blockid, OUT & ptr))
-      return false;
-
-    *bp = static_cast<ArrayBlockPtr<TObj> *>(ptr);
-    return true;
+  ArrayBlockPtr<TObj> *blockByID(u64 blockid) const {
+    return static_cast<ArrayBlockPtr<TObj> *>(blockByIDImpl(blockid));
   }
 
   TObj &objectByID(u64 objid) {

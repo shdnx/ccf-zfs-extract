@@ -1,3 +1,5 @@
+#include "utils/log.h"
+
 #include "zfs/indirect_block.h"
 
 namespace zfs {
@@ -49,11 +51,13 @@ detail::IndirectBlockNode *IndirectBlockBase::_getChildNode(u64  blockid,
   detail::IndirectBlockNode *node      = &m_roots[rootIndex];
 
   // then come the indirect block levels, which are just arrays of blkptrs
-  for (int level = numLevels() - 1; level > 0; level--) {
+  // for (int level = numLevels() - 1; level > 0; level--) {
+  for (int level = numLevels() - 2; level >= 0; level--) {
     ASSERT0(node->size() == indirectBlockSize());
 
     const std::size_t index = _calculateIndex(blockid, level);
-    node                    = node->readIndirectChild(*m_reader, index, true);
+
+    node = node->readIndirectChild(*m_reader, index, true);
     if (!node)
       return nullptr;
   }

@@ -3,13 +3,11 @@
 
 #include "utils/array_view.h"
 #include "utils/common.h"
+#include "utils/file.h"
 #include "utils/log.h"
+
 #include "zfs/indirect_block.h"
-#include "zfs/physical/dnode.h"
-#include "zfs/physical/mzap.h"
-#include "zfs/physical/mzap.h"
-#include "zfs/physical/objset.h"
-#include "zfs/physical/uberblock.h"
+#include "zfs/physical.h"
 #include "zfs/zpool_reader.h"
 
 using namespace zfs;
@@ -56,23 +54,29 @@ static physical::DNode *getRootDataset(ZPoolReader &                  reader,
   return nullptr;
 }
 
-/*static bool dumpDirNode(FILE *fp, ZPoolReader &zpool, const DNode &dirNode) {
-  const Blkptr &bp = dirNode.bps[0];
-  MZapBlock     zap{bp.getLogicalSize()};
+static bool extractFileContents(ZPoolReader &          reader,
+                                const physical::DNode &dnode,
+                                const std::string &    outFile) {
+  IndirectBlock indirectBlock{reader, dnode};
+  LOG("File total size: %zu, indirect block size: %zu, num data blocks: %zu\n",
+      indirectBlock.size(), indirectBlock.indirectBlockSize(),
+      indirectBlock.numDataBlocks());
 
-  if (!zpool.readVLObject(bp, /*dva_index=* /0, OUT zap.data())) {
+  File fp{outFile, File::Write};
+  if (!fp) {
+    LOG("Failed to open output file!\n");
     return false;
   }
 
-  ASSERT(zap->block_type == ZapBlockType::Micro,
-         "Cannot handle non-micro ZAP!");
-
-  for (const MZapEntry &entry : zap.entries()) {
-    std::fprintf(stderr, "")
+  for (BlockRef dataBlock : indirectBlock.blocks()) {
+    LOG("Extracting block %p of size %zu...\n", dataBlock.data(),
+        dataBlock.size());
+    ASSERT0(std::fwrite(dataBlock.data(), dataBlock.size(), 1, fp) == 1);
   }
 
+  LOG("Extraction complete!\n");
   return true;
-}*/
+}
 
 static bool handleMOS(ZPoolReader &reader, ArrayBlockRef<physical::DNode> mos) {
   /*for (size_t i = 0; i < mosLength; i++) {
@@ -126,6 +130,10 @@ static bool handleMOS(ZPoolReader &reader, ArrayBlockRef<physical::DNode> mos) {
 
     LOG("DSLNodes[%zu]: ", i);
     dslNode.dump(stderr);
+
+    if (dslNode.type == DNodeType::FileContents) {
+      extractFileContents(reader, dslNode, "extracted.txt");
+    }
   }
 
 #if 0
