@@ -304,6 +304,38 @@ void DSLDataSet::dump(std::FILE *fp, DumpFlags flags) const {
   }
 }
 
+void ZNodeTime::dump(std::FILE *fp, DumpFlags flags) const {
+  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "ZNodeTime: invalid\n");
+    return;
+  }
+
+  PRINT(fp, "ZNodeTime <%lu.%lu>\n", seconds, nanoseconds);
+}
+
+void ZNode::dump(std::FILE *fp, DumpFlags flags) const {
+  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "ZNode: invalid\n");
+    return;
+  }
+
+  OBJECT_HEADER(fp, *this, "ZNode:") {
+    DUMP_FIELD(gen_txg);
+    DUMP_FIELD(mode);
+    DUMP_FIELD(size);
+    DUMP_FIELD(parent_obj);
+    DUMP_FIELD(links);
+    DUMP_FIELD(flags);
+    DUMP_FIELD(uid);
+    DUMP_FIELD(gid);
+
+    INLINE_HEADER(fp, "time_created: ") { time_created.dump(fp, flags); }
+    INLINE_HEADER(fp, "time_modified: ") { time_modified.dump(fp, flags); }
+    INLINE_HEADER(fp, "time_changed: ") { time_changed.dump(fp, flags); }
+    INLINE_HEADER(fp, "time_accessed: ") { time_accessed.dump(fp, flags); }
+  }
+}
+
 } // end namespace physical
 
 void MZapBlockPtr::dump(std::FILE *fp, DumpFlags flags) const {

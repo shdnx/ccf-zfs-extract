@@ -44,9 +44,9 @@ struct DNode {
   void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 
   template <typename T>
-  const T *getBonusAs() const {
+  const T &getBonusAs() const {
     ASSERT0(bonustype != 0 && bonuslen != 0 && nblkptr < 3);
-    return reinterpret_cast<const T *>(bonus);
+    return *reinterpret_cast<const T *>(bonus);
   }
 } __attribute__((packed));
 
