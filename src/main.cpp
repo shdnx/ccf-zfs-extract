@@ -4,7 +4,9 @@
 #include "utils/array_view.h"
 #include "utils/common.h"
 #include "utils/log.h"
+#include "zfs/indirect_block.h"
 #include "zfs/physical/dnode.h"
+#include "zfs/physical/mzap.h"
 #include "zfs/physical/mzap.h"
 #include "zfs/physical/objset.h"
 #include "zfs/physical/uberblock.h"
@@ -12,51 +14,21 @@
 
 using namespace zfs;
 
-/*static void handle_dnode(ZPoolReader &zpool, const DNode &dnode, unsigned
-level = 0)
-{
-  ASSERT(level < 3, "Too many levels!!");
-
-  if (!dnode.validate()) {
-    LOG("Got invalid dnode, skipping!\n");
-    return;
-  }
-
-  LOG(" -- Got a valid dnode:\n");
-  dnode.dump(stderr);
-
-  if (dnode.nlevels == 0) {
-    LOG("!!!! It's a leaf dnode!\n");
-  } else {
-    LOG(" -- following dnode tree, levels = %u\n", dnode.nlevels);
-
-    DNode child_dnode;
-    for (size_t i = 0; i < dnode.nblkptr; i++) {
-      for (size_t v = 0; v < 1; v++) {
-        if (zpool.readObject(dnode.bps[i], v, OUT & child_dnode)) {
-          handle_dnode(zpool, child_dnode, level + 1);
-        }
-      }
+static bool getRootDataset(ZPoolReader &reader, const physical::DNode &objDir,
+                           OUT u64 *rootIndex) {
+  for (std::size_t bp_index = 0; bp_index < objDir.nblkptr; bp_index++) {
+    MZapBlockPtr zap;
+    for (std::size_t dva = 0; dva < 3 && !zap; dva++) {
+      zap = reader.read(objDir.bps[bp_index], dva).cast<MZapBlockPtr>();
     }
-  }
-}*/
 
-static bool getRootDataset(ZPoolReader &zpool, const DNode &objDir,
-                           OUT u64 *root_index) {
-  for (size_t bp_index = 0; bp_index < objDir.nblkptr; bp_index++) {
-    const Blkptr &bp = objDir.bps[bp_index];
-    MZapBlock     zap{bp.getLogicalSize()};
-
-    if (!zpool.readVLObject(bp, 0, OUT zap.data()))
+    if (!zap)
       continue;
-
-    ASSERT(zap->block_type == ZapBlockType::Micro,
-           "Cannot handle non-micro ZAP!");
 
     zap.dump(stderr);
 
-    if (const MZapEntry *entry = zap.findEntry("root_dataset")) {
-      OUT *root_index = entry->value;
+    if (const physical::MZapEntry *entry = zap.findEntry("root_dataset")) {
+      OUT *rootIndex = entry->value;
       return true;
     }
   }
@@ -64,10 +36,10 @@ static bool getRootDataset(ZPoolReader &zpool, const DNode &objDir,
   return false;
 }
 
-static bool getRootDataset(ZPoolReader &zpool, const DNode *mos,
-                           size_t mosLength, OUT DNode const **rootDataset) {
-  for (size_t i = 0; i < mosLength; i++) {
-    const DNode &dnode = mos[i];
+// TODO: the MOS should probably also be an indirect block
+static physical::DNode *getRootDataset(ZPoolReader &                  reader,
+                                       ArrayBlockRef<physical::DNode> mos) {
+  for (const physical::DNode &dnode : mos.objects()) {
     if (!dnode.isValid())
       continue;
 
@@ -76,43 +48,12 @@ static bool getRootDataset(ZPoolReader &zpool, const DNode *mos,
       dnode.dump(stderr);
 
       u64 rootDatasetIndex;
-      if (getRootDataset(zpool, dnode, OUT & rootDatasetIndex)) {
-        OUT *rootDataset = &mos[rootDatasetIndex];
-        return true;
-      }
+      if (getRootDataset(reader, dnode, OUT & rootDatasetIndex))
+        return &mos[rootDatasetIndex];
     }
   }
 
-  return false;
-}
-
-static const DNode *getDSLNodes(ZPoolReader &zpool, const ObjSet &dslObjSet,
-                                OUT std::unique_ptr<DNode[]> *ll_nodes,
-                                OUT size_t *nll_nodes) {
-  // the master node always has the object id = 1, so we'll just take the first
-  // blkptr on all levels
-
-  Blkptr                    bp = dslObjSet.metadnode.bps[0];
-  std::unique_ptr<Blkptr[]> bp_array;
-  size_t                    bp_array_len;
-
-  for (size_t lvl = dslObjSet.metadnode.nlevels; lvl > 1; lvl--) {
-    // we read all blkptrs, so that it's easy to generalize this function later
-    bp_array_len = zpool.readObjectArray(bp, /*dva_index=*/0, OUT & bp_array);
-    ASSERT(bp_array_len != 0, "Failed to read blkptr object array!");
-
-    bp = bp_array[0]; // copy
-  }
-
-  std::unique_ptr<DNode[]> dnodes;
-  size_t ndnodes = zpool.readObjectArray(bp, /*dva_index=*/0, OUT & dnodes);
-  ASSERT0(ndnodes != 0);
-
-  const DNode *masterNode = &dnodes[1];
-
-  OUT *nll_nodes = ndnodes;
-  OUT *ll_nodes  = std::move(dnodes);
-  return masterNode;
+  return nullptr;
 }
 
 /*static bool dumpDirNode(FILE *fp, ZPoolReader &zpool, const DNode &dirNode) {
@@ -133,7 +74,7 @@ static const DNode *getDSLNodes(ZPoolReader &zpool, const ObjSet &dslObjSet,
   return true;
 }*/
 
-static bool handleMOS(ZPoolReader &zpool, ArrayBlockRef<physical::DNode> mos) {
+static bool handleMOS(ZPoolReader &reader, ArrayBlockRef<physical::DNode> mos) {
   /*for (size_t i = 0; i < mosLength; i++) {
     const DNode &dnode = mos[i];
     if (!dnode.isValid())
@@ -142,8 +83,8 @@ static bool handleMOS(ZPoolReader &zpool, ArrayBlockRef<physical::DNode> mos) {
     LOG("DNode of type %u\n", static_cast<u32>(dnode.type));
   }*/
 
-  ObjBlockPtr<physical::DNode> rootDatasetNode;
-  if (!getRootDataset(zpool, mos, OUT & rootDatasetNode)) {
+  physical::DNode *rootDatasetNode = getRootDataset(reader, mos);
+  if (!rootDatasetNode) {
     LOG("Could not find the root dataset entry in an object directory!\n");
     return false;
   }
@@ -155,55 +96,39 @@ static bool handleMOS(ZPoolReader &zpool, ArrayBlockRef<physical::DNode> mos) {
   auto headDataset = headDatasetNode.getBonusAs<physical::DSLDataSet>();
   // headDataset->dump(stderr);
 
-  ObjBlockPtr<physical::ObjSet> rootObjSet;
-  for (size_t root_dva = 0; root_dva < 2; root_dva++) {
-    if (!zpool.read(headDataset->bp, root_dva, OUT & rootObjSet)) {
-      LOG("Failed to read root ObjSet from dva %zu!\n", root_dva);
-      continue;
-    }
+  auto dslObjSet =
+      reader.read<ObjBlockPtr<physical::ObjSet>>(headDataset->bp, /*dva=*/0);
+  dslObjSet->dump(stderr);
 
-    break;
-  }
+  // the master node always has the object id = 1
+  IndirectObjBlock<physical::DNode> dslBlock{reader, dslObjSet->metadnode};
+  const physical::DNode &           masterNode = dslBlock.objectByID(1);
+  masterNode.dump(stderr);
 
-  rootObjSet.dump(stderr);
+  auto masterZap = reader.read<MZapBlockPtr>(masterNode.bps[0], /*dva=*/0);
+  ASSERT0(masterZap && masterZap->isValid());
 
-  std::unique_ptr<DNode[]> dslNodes;
-  size_t                   ndslnodes;
-  const DNode *            masterNode =
-      getDSLNodes(zpool, rootObjSet, OUT & dslNodes, OUT & ndslnodes);
-  if (!masterNode) {
-    LOG("Could not get master node!\n");
-    return false;
-  }
+  masterZap.dump(stderr);
 
-  masterNode->dump(stderr);
-
-  const physical::Blkptr &masterBP = masterNode->bps[0];
-  MZapBlock               masterZAP{masterBP.getLogicalSize()};
-
-  if (!zpool.readVLObject(masterBP, /*dva=*/0, OUT masterZAP.data())) {
-    LOG("Could not read the master ZAP block!\n");
-    return false;
-  }
-
-  ASSERT0(masterZAP.isValid());
-
-  masterZAP.dump(stderr);
-
-  const MZapEntry *rootEntry = masterZAP.findEntry("ROOT");
+  const physical::MZapEntry *rootEntry = masterZap.findEntry("ROOT");
   if (!rootEntry) {
     LOG("Could not find the MZapEntry for the filesystem root!\n");
     return false;
   }
 
-  const u64 rootDirIndex = rootEntry->value;
-  LOG("filesystem ROOT entry = %lu\n", rootDirIndex);
+  const u64 rootDirObjID = rootEntry->value;
+  LOG("filesystem ROOT entry obj id = %lu\n", rootDirObjID);
 
-  for (size_t i = 0; i < ndslnodes; i++) {
+  for (std::size_t i = 0; i < dslBlock.numObjects(); i++) {
+    const physical::DNode &dslNode = dslBlock.objectByID(i);
+    if (!dslNode.isValid())
+      continue;
+
     LOG("DSLNodes[%zu]: ", i);
-    dslNodes[i].dump(stderr);
+    dslNode.dump(stderr);
   }
 
+#if 0
   const DNode &rootDirNode = dslNodes[rootDirIndex];
   rootDirNode.dump(stderr, DumpFlags::AllowInvalid);
 
@@ -216,6 +141,7 @@ static bool handleMOS(ZPoolReader &zpool, ArrayBlockRef<physical::DNode> mos) {
 
   // ASSERT0(rootDirZAP.isValid());
   rootDirZAP.dump(stderr);
+#endif
 
   return true;
 }
@@ -235,12 +161,12 @@ static void handle_ub(ZPoolReader &zpool, const physical::Uberblock &ub) {
       return;
     }
 
-    objset.dump(stderr);
+    objset->dump(stderr);
 
     ArrayBlockPtr<physical::DNode> dnodes;
-    for (size_t blkptr_index = 0; blkptr_index < objset.metadnode.nblkptr;
+    for (size_t blkptr_index = 0; blkptr_index < objset->metadnode.nblkptr;
          blkptr_index++) {
-      const Blkptr &bp = objset.metadnode.bps[blkptr_index];
+      const physical::Blkptr &bp = objset->metadnode.bps[blkptr_index];
       if (!bp.isValid())
         continue;
 
@@ -251,13 +177,12 @@ static void handle_ub(ZPoolReader &zpool, const physical::Uberblock &ub) {
         LOG(" -- following root objset.metadnode.bps[%zu] with dva = %zu\n",
             blkptr_index, dva_index);
 
-        const size_t nread = zpool.read(bp, dva_index, OUT & dnodes);
-        if (!nread) {
+        if (!zpool.read(bp, dva_index, OUT & dnodes)) {
           LOG("Failed to read MOS object array!\n");
           continue;
         }
 
-        if (handleMOS(zpool, dnodes, nread))
+        if (handleMOS(zpool, dnodes))
           return;
       }
     }

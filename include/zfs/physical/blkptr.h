@@ -64,7 +64,10 @@ struct Blkptr {
   void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 } __attribute__((packed));
 
-static_assert(sizeof(Blkptr) == 128, "Blkptr definition incorrect!");
+#define BLKPTR_SHIFT 7
+
+static_assert(sizeof(Blkptr) == (1 << BLKPTR_SHIFT),
+              "Blkptr definition incorrect!");
 
 } // end namespace physical
 } // end namespace zfs

@@ -2,6 +2,6 @@
 
 namespace zfs {
 
-BlockPtr BlockPtr::null{};
+// const BlockPtr BlockPtr::null{};
 
 } // end namespace zfs

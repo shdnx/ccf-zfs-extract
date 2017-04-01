@@ -1,6 +1,7 @@
 #pragma once
 
 #include <new>
+#include <utility> // std::move
 
 #include "utils/array_view.h"
 
@@ -36,7 +37,7 @@ private:
 // extra fields, or increase the size in any way. It has to be possible for a
 // BlockPtr to be reinterpreted as an object of any child class.
 struct BlockPtr {
-  static const BlockPtr null;
+  // static const BlockPtr null;
 
   template <typename T>
   static T allocate(size_t dataSize) {
@@ -83,15 +84,15 @@ struct BlockPtr {
   }
 
   template <typename T>
-  T &getAs() {
+  T &cast() & {
     ASSERT0(sizeof(T) == sizeof(BlockPtr));
-    return *static_cast<T *>(this);
+    return static_cast<T &>(*this);
   }
 
   template <typename T>
-  const T &getAs() {
+  const T &cast() const & {
     ASSERT0(sizeof(T) == sizeof(BlockPtr));
-    return *static_cast<const T *>(this);
+    return static_cast<const T &>(*this);
   }
 
   template <typename T>
@@ -125,11 +126,9 @@ using BlockCRef = const BlockPtr &;
 
 template <typename T>
 struct ObjBlockPtr : BlockPtr {
-  GEN_BLOCKPTR_SUPPORT(ObjBlockPtr, BlockPtr) {
-    ASSERT0(ptr->size() == sizeof(T));
-  }
+  GEN_BLOCKPTR_SUPPORT(ObjBlockPtr, BlockPtr) { ASSERT0(size() == sizeof(T)); }
 
-  T *      object() { reinterpret_cast<T *>(data()); }
+  T *      object() { return reinterpret_cast<T *>(data()); }
   const T *object() const { return reinterpret_cast<const T *>(data()); }
 
   T *operator->() { return object(); }
@@ -142,15 +141,24 @@ struct ObjBlockPtr : BlockPtr {
 template <typename T>
 struct ObjBlockPtr<T[]> : BlockPtr {
   GEN_BLOCKPTR_SUPPORT(ObjBlockPtr, BlockPtr) {
-    ASSERT0(ptr->size() % sizeof(T) == 0);
+    ASSERT0(size() % sizeof(T) == 0);
   }
 
   ArrayView<T> objects() { return ArrayView<T>{data(), size()}; }
   size_t       numObjects() { return objects().size(); }
+
+  T &operator[](std::size_t i) { return reinterpret_cast<T *>(data())[i]; }
+
+  const T &operator[](std::size_t i) const {
+    return reinterpret_cast<const T *>(data())[i];
+  }
 };
 
 template <typename T>
 using ObjBlockRef = ObjBlockPtr<T> &;
+
+template <typename T>
+using ObjBlockCRef = const ObjBlockRef<T>;
 
 template <typename T>
 using ArrayBlockPtr = ObjBlockPtr<T[]>;
@@ -158,25 +166,44 @@ using ArrayBlockPtr = ObjBlockPtr<T[]>;
 template <typename T>
 using ArrayBlockRef = ArrayBlockPtr<T> &;
 
+template <typename T>
+using ArrayBlockCRef = const ArrayBlockRef<T>;
+
 template <typename THeader, typename TEntry>
 struct HeadedBlockPtr : BlockPtr {
   GEN_BLOCKPTR_SUPPORT(HeadedBlockPtr, BlockPtr) {
-    ASSERT0(ptr->size() >= sizeof(THeader));
-    ASSERT0((ptr->size() - sizeof(THeader)) % sizeof(TEntry) == 0);
+    ASSERT0(size() >= sizeof(THeader));
+    ASSERT0((size() - sizeof(THeader)) % sizeof(TEntry) == 0);
   }
 
-  THeader *      header() { reinterpret_cast<THeader *>(data()); }
-  const THeader *header() const { reinterpret_cast<const THeader *>(data()); }
+  THeader *      header() { return reinterpret_cast<THeader *>(data()); }
+  const THeader *header() const {
+    return reinterpret_cast<const THeader *>(data());
+  }
 
   THeader *operator->() { return header(); }
   const THeader *operator->() const { return header(); }
 
-  THeader &operator*() { return *header(); }
-  const THeader &operator*() const { return *header(); }
+  THeader &operator*() { return *operator->(); }
+  const THeader &operator*() const { return *operator->(); }
+
+  std::size_t numEntries() const {
+    return (size() - sizeof(THeader)) / sizeof(TEntry);
+  }
 
   ArrayView<TEntry> entries() {
     return ArrayView<TEntry>{reinterpret_cast<char *>(data()) + sizeof(THeader),
                              size() - sizeof(THeader)};
+  }
+
+  TEntry &operator[](std::size_t i) {
+    return reinterpret_cast<TEntry *>(reinterpret_cast<char *>(data()) +
+                                      sizeof(THeader))[i];
+  }
+
+  const TEntry &operator[](std::size_t i) const {
+    return reinterpret_cast<const TEntry *>(
+        reinterpret_cast<const char *>(data()) + sizeof(THeader))[i];
   }
 };
 

@@ -1,7 +1,7 @@
 #include <cstdio>
 #include <type_traits>
 
-#include "zfs-objects.h"
+#include "zfs/physical.h"
 
 // ---- DSL magic, you do not want to be here ----
 
@@ -75,20 +75,21 @@ FIELD_FORMAT(bool, "%d");
 FIELD_FORMAT(char *, "%s");
 
 template <typename T>
-static inline void printFieldImpl(FILE *fp, const char *fieldName, T fieldValue,
-                                  std::true_type) {
+static inline void printFieldImpl(std::FILE *fp, const char *fieldName,
+                                  T fieldValue, std::true_type) {
   PRINT(fp, FMT_PREFIX "%lu (0x%lx)" FMT_SUFFIX, fieldName,
         static_cast<u64>(fieldValue), static_cast<u64>(fieldValue));
 }
 
 template <typename T>
-static inline void printFieldImpl(FILE *fp, const char *fieldName, T fieldValue,
-                                  std::false_type) {
+static inline void printFieldImpl(std::FILE *fp, const char *fieldName,
+                                  T fieldValue, std::false_type) {
   PRINT(fp, FieldFormat<std::decay_t<T>>::value, fieldName, fieldValue);
 }
 
 template <typename T>
-static inline void printField(FILE *fp, const char *fieldName, T fieldValue) {
+static inline void printField(std::FILE *fp, const char *fieldName,
+                              T fieldValue) {
   printFieldImpl(fp, fieldName, fieldValue,
                  std::integral_constant<bool, std::is_enum<T>::value>{});
 }
@@ -104,15 +105,15 @@ static inline void printField(FILE *fp, const char *fieldName, T fieldValue) {
 
 template <typename TObj>
 struct DumpObjCtx {
-  FILE *      fp;
+  std::FILE * fp;
   const TObj *obj;
   bool        run = true;
 
-  explicit DumpObjCtx(FILE *fp_, const TObj *obj_) : fp{fp_}, obj{obj_} {}
+  explicit DumpObjCtx(std::FILE *fp_, const TObj *obj_) : fp{fp_}, obj{obj_} {}
 };
 
 template <typename TObj>
-static inline DumpObjCtx<TObj> make_obj_ctx(FILE *fp, const TObj &obj) {
+static inline DumpObjCtx<TObj> make_obj_ctx(std::FILE *fp, const TObj &obj) {
   return DumpObjCtx<TObj>{fp, &obj};
 }
 
@@ -129,13 +130,16 @@ static inline DumpObjCtx<TObj> make_obj_ctx(FILE *fp, const TObj &obj) {
 // ----- end DSL magic ------
 
 template <typename TObj>
-static void checkValid(FILE *fp, const TObj *obj) {
+static void checkValid(std::FILE *fp, const TObj *obj) {
   if (!obj->isValid()) {
     PRINT(fp, "!! WARNING: failed validation: %s\n", TObj::validation_expr);
   }
 }
 
-void Dva::dump(FILE *fp, DumpFlags flags) const {
+namespace zfs {
+namespace physical {
+
+void Dva::dump(std::FILE *fp, DumpFlags flags) const {
   if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "DVA: invalid\n");
     return;
@@ -147,7 +151,7 @@ void Dva::dump(FILE *fp, DumpFlags flags) const {
   }
 }
 
-void Blkptr::dump(FILE *fp, DumpFlags flags) const {
+void Blkptr::dump(std::FILE *fp, DumpFlags flags) const {
   if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "BLKPTR: invalid\n");
     return;
@@ -170,7 +174,7 @@ void Blkptr::dump(FILE *fp, DumpFlags flags) const {
   }
 }
 
-void Uberblock::dump(FILE *fp, DumpFlags flags) const {
+void Uberblock::dump(std::FILE *fp, DumpFlags flags) const {
   if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "Uberblock: invalid\n");
     return;
@@ -186,7 +190,7 @@ void Uberblock::dump(FILE *fp, DumpFlags flags) const {
   }
 }
 
-void DNode::dump(FILE *fp, DumpFlags flags) const {
+void DNode::dump(std::FILE *fp, DumpFlags flags) const {
   if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "DNode: invalid\n");
     return;
@@ -200,7 +204,7 @@ void DNode::dump(FILE *fp, DumpFlags flags) const {
     DUMP_FIELD(phys_comp);
     DUMP_FIELD(checksum);
     DUMP_FIELD(indblkshift);
-    DUMP_FIELD(data_blk_size_secs);
+    DUMP_FIELD(data_sectors);
     DUMP_FIELD(nblkptr);
     DUMP_FIELD(nlevels);
 
@@ -216,7 +220,7 @@ void DNode::dump(FILE *fp, DumpFlags flags) const {
   }
 }
 
-void ObjSet::dump(FILE *fp, DumpFlags flags) const {
+void ObjSet::dump(std::FILE *fp, DumpFlags flags) const {
   if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "ObjSet: invalid\n");
     return;
@@ -231,7 +235,7 @@ void ObjSet::dump(FILE *fp, DumpFlags flags) const {
   }
 }
 
-void MZapEntry::dump(FILE *fp, DumpFlags flags) const {
+void MZapEntry::dump(std::FILE *fp, DumpFlags flags) const {
   if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "MZapEntry: invalid\n");
     return;
@@ -240,7 +244,7 @@ void MZapEntry::dump(FILE *fp, DumpFlags flags) const {
   OBJECT_HEADER(fp, *this, "MZapEntry <%s = 0x%lx>", name, value) {}
 }
 
-void MZapHeader::dump(FILE *fp, DumpFlags flags) const {
+void MZapHeader::dump(std::FILE *fp, DumpFlags flags) const {
   if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "MZapHeader: invalid\n");
     return;
@@ -252,32 +256,7 @@ void MZapHeader::dump(FILE *fp, DumpFlags flags) const {
   }
 }
 
-void MZapBlock::dump(FILE *fp, DumpFlags flags) const {
-  if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
-    PRINT(fp, "MZapBlock: invalid\n");
-    return;
-  }
-
-  HEADER(fp, "MZapBlock:") {
-    INLINE_HEADER(fp, "header: ") {
-      const MZapHeader *hdr = header();
-      if (hdr) {
-        hdr->dump(fp, flags);
-      } else {
-        PRINT(fp, "(nullptr)\n");
-      }
-    }
-
-    const size_t nentries = numEntries();
-    HEADER(fp, "entries[%zu]: ", nentries) {
-      for (size_t i = 0; i < nentries; i++) {
-        INLINE_HEADER(fp, "[%zu]: ", i) { entries()[i].dump(fp, flags); }
-      }
-    }
-  }
-}
-
-void DSLDir::dump(FILE *fp, DumpFlags flags) const {
+void DSLDir::dump(std::FILE *fp, DumpFlags flags) const {
   if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "DSLDir: invalid\n");
     return;
@@ -296,7 +275,7 @@ void DSLDir::dump(FILE *fp, DumpFlags flags) const {
   }
 }
 
-void DSLDataSet::dump(FILE *fp, DumpFlags flags) const {
+void DSLDataSet::dump(std::FILE *fp, DumpFlags flags) const {
   if (!isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
     PRINT(fp, "DSLDataSet: invalid\n");
     return;
@@ -324,3 +303,31 @@ void DSLDataSet::dump(FILE *fp, DumpFlags flags) const {
     INLINE_HEADER(fp, "bp: ") { bp.dump(fp, flags); }
   }
 }
+
+} // end namespace physical
+
+void MZapBlockPtr::dump(std::FILE *fp, DumpFlags flags) const {
+  if (!header()->isValid() && !flag_isset(flags, DumpFlags::AllowInvalid)) {
+    PRINT(fp, "MZapBlock: invalid\n");
+    return;
+  }
+
+  HEADER(fp, "MZapBlock:") {
+    INLINE_HEADER(fp, "header: ") {
+      if (const physical::MZapHeader *hdr = header()) {
+        hdr->dump(fp, flags);
+      } else {
+        PRINT(fp, "(nullptr)\n");
+      }
+    }
+
+    const size_t nentries = numEntries();
+    HEADER(fp, "entries[%zu]: ", nentries) {
+      for (size_t i = 0; i < nentries; i++) {
+        INLINE_HEADER(fp, "[%zu]: ", i) { (*this)[i].dump(fp, flags); }
+      }
+    }
+  }
+}
+
+} // end namespace zfs

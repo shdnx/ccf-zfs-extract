@@ -3,7 +3,7 @@ CXXFLAGS = -DDEBUG -std=c++14 -ggdb -O0 -Wall -Wextra
 INCLUDES = -Iinclude -Ideps/lz4xx/include
 LDFLAGS = -Ldeps/lz4xx/build -Wl,-whole-archive -l:liblz4xx.a -Wl,-no-whole-archive
 
-SRCS = $(wildcard src/*.cpp)
+SRCS = $(shell find src/ -type f -name '*.cpp')
 OBJS = $(patsubst src/%.cpp,obj/%.o,$(SRCS))
 DEPS = $(OBJS:.o=.d)
 BIN = bin/ccf-zfs
@@ -22,6 +22,7 @@ clean:
 	rm -f $(BIN)
 
 obj/%.o: src/%.cpp
+	mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -MMD $< -o $@
 
 $(BIN): $(OBJS)

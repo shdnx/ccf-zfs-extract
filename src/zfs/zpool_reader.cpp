@@ -29,7 +29,8 @@ static bool seekToLabel(std::FILE *fp, u32 label_index) {
   }
 }
 
-bool ZPool::readUberblock(u32 label_index, u32 ub_index, OUT Uberblock *ub) {
+bool ZPoolReader::readUberblock(u32 label_index, u32 ub_index,
+                                OUT physical::Uberblock *ub) {
   if (!seekToLabel(m_fp, label_index)) {
     LOG("Could not seek to label L%u!\n", label_index);
     return false;
@@ -38,7 +39,7 @@ bool ZPool::readUberblock(u32 label_index, u32 ub_index, OUT Uberblock *ub) {
   long offset = static_cast<long>(KB * (128 + ub_index));
   std::fseek(m_fp, offset, SEEK_CUR);
 
-  size_t nread = std::fread(ub, sizeof(Uberblock), 1, m_fp);
+  size_t nread = std::fread(ub, sizeof(physical::Uberblock), 1, m_fp);
   if (nread != 1) {
     LOG("Uberblock L%u:%u could not be read from file!\n", label_index,
         ub_index);
@@ -106,20 +107,20 @@ static Compress getEffectiveCompression(Compress comp) {
   }
 }
 
-bool ZPool::readRawData(const physical::Blkptr &bp, u32 dva_index,
-                        OUT void *data) {
+bool ZPoolReader::read(const physical::Blkptr &bp, u32 dva_index,
+                       OUT void *data) {
   ASSERT(bp.isValid(), "Cannot resolve invalid blkptr!");
   ASSERT(bp.endian == Endian::Little, "Cannot handle big endian blkptr!");
 
-  const size_t lsize = bp.getLogicalSize();
-  const size_t psize = bp.getPhysicalSize();
+  const std::size_t lsize = bp.getLogicalSize();
+  const std::size_t psize = bp.getPhysicalSize();
 
-  const Dva &dva = bp.dva[dva_index];
+  const physical::Dva &dva = bp.dva[dva_index];
   ASSERT(dva.isValid(), "Cannot resolve invalid DVA at index %u!", dva_index);
   ASSERT(!dva.gang_block, "Don't know how to resolve a gangblock DVA!");
 
-  const u64    addr  = dva.getAddress();
-  const size_t asize = dva.getAllocatedSize();
+  const u64         addr  = dva.getAddress();
+  const std::size_t asize = dva.getAllocatedSize();
 
   LOG("Reading %zu logical (%zu physical) bytes from DVA: ", lsize, psize);
   dva.dump(stderr);

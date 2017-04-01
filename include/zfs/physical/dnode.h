@@ -8,15 +8,15 @@ namespace physical {
 
 struct DNode {
   DNodeType type;
-  u8        indblkshift;
-  u8        nlevels; // number of levels of indirection
-  u8        nblkptr; // number of block pointers
-  u8        bonustype;
-  u8        checksum;
-  u8        phys_comp; // physical compress flag?
-  u8        flags;
+  u8 indblkshift; // log2 of the size of each indirect block under this DNode
+  u8 nlevels;     // number of levels of indirection
+  u8 nblkptr;     // number of block pointers
+  u8 bonustype;
+  u8 checksum;
+  u8 phys_comp; // physical compress flag?
+  u8 flags;
 
-  u16 data_blk_size_secs;
+  u16 data_sectors;
   u16 bonuslen;
   PADDING(4);
 

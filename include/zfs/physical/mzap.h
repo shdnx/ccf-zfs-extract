@@ -46,12 +46,18 @@ struct MZapHeader {
   void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 } __attribute__((packed));
 
-struct MZapBlockPtr : HeadedBlockPtr<MZapHeader, MZapEntry> {
-  GEN_BLOCKPTR_SUPPORT(MZapBlockPtr,
-                       REFL(HeadedBlockPtr<MZapHeader, MZapEntry>)) {}
+} // end namespace physical
 
-  const MZapEntry *findEntry(const std::string &name) {
-    for (const MZapEntry &entry : entries()) {
+struct MZapBlockPtr
+    : HeadedBlockPtr<physical::MZapHeader, physical::MZapEntry> {
+  GEN_BLOCKPTR_SUPPORT(
+      MZapBlockPtr,
+      REFL(HeadedBlockPtr<physical::MZapHeader, physical::MZapEntry>)) {
+    ASSERT0(header()->block_type == physical::ZapBlockType::Micro);
+  }
+
+  const physical::MZapEntry *findEntry(const std::string &name) {
+    for (const physical::MZapEntry &entry : entries()) {
       if (name == entry.name)
         return &entry;
     }
@@ -62,5 +68,4 @@ struct MZapBlockPtr : HeadedBlockPtr<MZapHeader, MZapEntry> {
   void dump(std::FILE *fp, DumpFlags flags = DumpFlags::None) const;
 };
 
-} // end namespace physical
 } // end namespace zfs

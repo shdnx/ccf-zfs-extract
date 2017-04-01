@@ -1,5 +1,7 @@
-#include "byteorder.h"
-#include "log.h"
+#include "zfs/byteorder.h"
+#include "utils/log.h"
+
+namespace zfs {
 
 void byteswap_uint64_array(void *vbuf, size_t size) {
   u64 *  buf   = static_cast<u64 *>(vbuf);
@@ -39,3 +41,5 @@ void byteswap_obj(void *obj, size_t obj_size) {
   LOG("Note: byteorder-correcting object %p of size %zu!\n", obj, obj_size);
   byteswap_uint64_array(obj, obj_size);
 }
+
+} // end namespace zfs

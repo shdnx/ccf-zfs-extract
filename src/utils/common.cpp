@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "common.h"
+#include "utils/common.h"
 
 // TODO: make a nicer, more robust solution - also read the value of the TERM
 // environment variable to figure out if colors are even supported
