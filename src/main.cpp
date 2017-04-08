@@ -1,3 +1,4 @@
+#include <cstring>
 #include <memory>
 #include <set>
 #include <vector>
@@ -76,7 +77,18 @@ static bool handleMOS(ZPoolReader &                      reader,
 
   // the master node always has the object id = 1
   IndirectObjBlock<physical::DNode> dslBlock{reader, dslObjSet->metadnode};
-  const physical::DNode &           masterNode = dslBlock.objectByID(1);
+
+  /*size_t i = 0;
+  for (const physical::DNode &dn : dslBlock.objects()) {
+    fprintf(stderr, "Object[%zu]: ", i);
+    dn.dump(stderr, DumpFlags::AllowInvalid);
+
+    i++;
+  }
+
+  return true;*/
+
+  const physical::DNode &masterNode = dslBlock.objectByID(1);
   masterNode.dump(stderr);
 
   auto masterZap = reader.read<MZapBlockPtr>(masterNode.bps[0], /*dva=*/0);
@@ -156,6 +168,23 @@ static void handle_ub(ZPoolReader &reader, const physical::Uberblock &ub) {
   handleMOS(reader, objsetBlock);
 }
 
+static void list_ubs(ZPoolReader &                           reader,
+                     const std::vector<physical::Uberblock> &ubs,
+                     ssize_t                                 maxTxgIndex) {
+  std::size_t i = 0;
+  for (const physical::Uberblock &ub : ubs) {
+    if (i == maxTxgIndex) {
+      std::fprintf(stderr, "[ACTIVE] ");
+    }
+
+    std::fprintf(stderr, "Uberblock[%zu]: ", i);
+    ub.dump(stderr);
+    i++;
+  }
+
+  std::fprintf(stderr, "Active Uberblock at index %zu\n", maxTxgIndex);
+}
+
 int main(int argc, const char **argv) {
   ASSERT(argc > 1, "Usage: %s <zpool-file-path>\n", argv[0]);
 
@@ -180,6 +209,25 @@ int main(int argc, const char **argv) {
     return 1;
   }
 
-  handle_ub(*zpool, ubs[max_txg_index]);
+  if (argc >= 3 && std::strcmp(argv[2], "--list-uberblocks") == 0) {
+    list_ubs(*zpool, ubs, max_txg_index);
+    return 0;
+  } else if (argc >= 3 && std::strcmp(argv[2], "--extract") == 0) {
+    long ubIndex = max_txg_index;
+    if (argc >= 4) {
+      ubIndex = std::atol(argv[3]);
+
+      if (ubIndex >= VDEV_LABEL_NUBERBLOCKS) {
+        std::fprintf(stderr, "Invalid uberblock index!\n");
+        return 1;
+      }
+    }
+
+    handle_ub(*zpool, ubs[ubIndex]);
+  } else {
+    std::fprintf(stderr, "Please specify either --list-uberblocks or --extract "
+                         "<uberblock index>\n");
+  }
+
   return 0;
 }

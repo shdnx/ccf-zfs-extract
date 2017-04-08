@@ -13,8 +13,8 @@
 using namespace zfs;
 
 enum class DirEntryFlags : u64 {
-  Dir  = 0x4000000000000000,
-  File = 0x8000000000000000
+  Dir  = 0x4000000000000000, // bit 62
+  File = 0x8000000000000000  // bit 63
 };
 
 bool extractFileContents(ZPoolReader &reader, const physical::DNode &dnode,
