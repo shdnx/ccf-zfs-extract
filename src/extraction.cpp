@@ -12,6 +12,11 @@
 
 using namespace zfs;
 
+enum class DirEntryFlags : u64 {
+  Dir  = 0x4000000000000000,
+  File = 0x8000000000000000
+};
+
 bool extractFileContents(ZPoolReader &reader, const physical::DNode &dnode,
                          const std::string &outFile) {
   ASSERT0(dnode.type == DNodeType::FileContents);
@@ -19,7 +24,8 @@ bool extractFileContents(ZPoolReader &reader, const physical::DNode &dnode,
   LOG("Extracting file to %s...\n", outFile.c_str());
 
   IndirectBlock indirectBlock{reader, dnode};
-  LOG("File total size: %zu, indirect block size: %zu, num data blocks: %zu\n",
+  LOG("File blocks total size: %zu, indirect block size: %zu, num data blocks: "
+      "%zu\n",
       indirectBlock.size(), indirectBlock.indirectBlockSize(),
       indirectBlock.numDataBlocks());
 
@@ -29,19 +35,18 @@ bool extractFileContents(ZPoolReader &reader, const physical::DNode &dnode,
     return false;
   }
 
-  // TODO: find the exact file size, it has to be stored somewhere
-  // before ZPL v5, it was stored in the ZNode in the bonus buffer
-  // but where is it now??
-  /*auto &znode = dnode.getBonusAs<physical::ZNode>();
+  const auto &znode = dnode.getBonusAs<physical::ZNode>();
   znode.dump(stderr);
 
-  const std::size_t fileSize = znode.size;*/
+  LOG("Actual file size: %lu\n", znode.size);
+
+  const std::size_t fileSize = znode.size;
 
   std::size_t writtenSize = 0;
   for (BlockRef dataBlock : indirectBlock.blocks()) {
-    /*const std::size_t writeSize =
-        std::min(dataBlock.size(), fileSize - writtenSize);*/
-    const std::size_t writeSize = dataBlock.size();
+    const std::size_t writeSize =
+        std::min(dataBlock.size(), fileSize - writtenSize);
+    // const std::size_t writeSize = dataBlock.size();
 
     LOG("Extracting block %p of size %zu, writing effective length %zu...\n",
         dataBlock.data(), dataBlock.size(), writeSize);
@@ -53,11 +58,6 @@ bool extractFileContents(ZPoolReader &reader, const physical::DNode &dnode,
   LOG("Extraction complete!\n");
   return true;
 }
-
-enum class DirEntryFlags : u64 {
-  Dir  = 0x4000000000000000,
-  File = 0x8000000000000000
-};
 
 std::size_t
 extractDirContents(ZPoolReader &                      reader,

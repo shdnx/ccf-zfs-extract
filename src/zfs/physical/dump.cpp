@@ -105,20 +105,24 @@ static inline void printField(std::FILE *fp, const char *fieldName,
 
 template <typename TObj>
 struct DumpObjCtx {
-  std::FILE * fp;
-  const TObj *obj;
-  bool        run = true;
+  std::FILE *    fp;
+  const TObj *   obj;
+  zfs::DumpFlags flags;
+  bool           run = true;
 
-  explicit DumpObjCtx(std::FILE *fp_, const TObj *obj_) : fp{fp_}, obj{obj_} {}
+  explicit DumpObjCtx(std::FILE *fp_, const TObj *obj_, zfs::DumpFlags flags_)
+      : fp{fp_}, obj{obj_}, flags{flags_} {}
 };
 
 template <typename TObj>
-static inline DumpObjCtx<TObj> make_obj_ctx(std::FILE *fp, const TObj &obj) {
-  return DumpObjCtx<TObj>{fp, &obj};
+static inline DumpObjCtx<TObj> make_obj_ctx(std::FILE *fp, const TObj &obj,
+                                            zfs::DumpFlags flags) {
+  return DumpObjCtx<TObj>{fp, &obj, flags};
 }
 
-#define DUMP_OBJECT(FP, OBJ)                                      \
-  for (auto __dumpctx = make_obj_ctx((FP), (OBJ)); __dumpctx.run; \
+// TODO: don't hardcode the identifier "flags"
+#define DUMP_OBJECT(FP, OBJ)                                             \
+  for (auto __dumpctx = make_obj_ctx((FP), (OBJ), flags); __dumpctx.run; \
        __dumpctx.run  = false)
 
 #define OBJECT_HEADER(FP, OBJ, ...) \
@@ -126,6 +130,11 @@ static inline DumpObjCtx<TObj> make_obj_ctx(std::FILE *fp, const TObj &obj) {
   DUMP_OBJECT((FP), (OBJ))
 
 #define DUMP_FIELD(FIELDNAME) DUMP(__dumpctx.fp, *__dumpctx.obj, FIELDNAME)
+
+#define DUMP_FIELD_REC(FIELDNAME)                                 \
+  INLINE_HEADER(__dumpctx.fp, #FIELDNAME ": ") {                  \
+    __dumpctx.obj->FIELDNAME.dump(__dumpctx.fp, __dumpctx.flags); \
+  }
 
 // ----- end DSL magic ------
 
@@ -320,7 +329,22 @@ void ZNode::dump(std::FILE *fp, DumpFlags flags) const {
   }
 
   OBJECT_HEADER(fp, *this, "ZNode:") {
-    DUMP_FIELD(gen_txg);
+    DUMP_FIELD(uid);
+    DUMP_FIELD(gid);
+    DUMP_FIELD(links);
+    DUMP_FIELD(gen);
+    DUMP_FIELD(mode);
+    DUMP_FIELD(parent);
+    DUMP_FIELD(size);
+
+    DUMP_FIELD_REC(atime);
+    DUMP_FIELD_REC(mtime);
+    DUMP_FIELD_REC(crtime);
+    DUMP_FIELD_REC(ctime);
+
+    DUMP_FIELD(flags);
+
+    /*DUMP_FIELD(gen_txg);
     DUMP_FIELD(mode);
     DUMP_FIELD(size);
     DUMP_FIELD(parent_obj);
@@ -332,7 +356,7 @@ void ZNode::dump(std::FILE *fp, DumpFlags flags) const {
     INLINE_HEADER(fp, "time_created: ") { time_created.dump(fp, flags); }
     INLINE_HEADER(fp, "time_modified: ") { time_modified.dump(fp, flags); }
     INLINE_HEADER(fp, "time_changed: ") { time_changed.dump(fp, flags); }
-    INLINE_HEADER(fp, "time_accessed: ") { time_accessed.dump(fp, flags); }
+    INLINE_HEADER(fp, "time_accessed: ") { time_accessed.dump(fp, flags); }*/
   }
 }
 
